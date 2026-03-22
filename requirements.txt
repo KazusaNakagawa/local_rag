@@ -4,4 +4,5 @@ langchain-ollama
 langchain-text-splitters
 faiss-cpu
 unstructured
+rank_bm25
 streamlit
