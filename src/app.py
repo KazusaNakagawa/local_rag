@@ -21,6 +21,11 @@ init_db()
 
 st.set_page_config(page_title="Obsidian RAG", page_icon="📓", layout="wide")
 
+# バックグラウンドスレッドと Streamlit UI の両方から安全にアクセスできるよう
+# モジュールレベルの set で管理する（st.session_state はスレッドから参照不可）
+_pending_sessions: set[str] = set()
+_pending_lock = threading.Lock()
+
 
 @st.cache_resource
 def _load_cached_resources():
@@ -46,16 +51,12 @@ if "session_id" not in st.session_state:
     recent = list_sessions()
     st.session_state.session_id = recent[0]["id"] if recent else create_session()
 
-# バックグラウンド処理中のセッション ID を追跡する
-if "pending_sessions" not in st.session_state:
-    st.session_state.pending_sessions = set()
-
 
 def _run_chain(session_id: str, question: str, chat_history: list) -> None:
     """バックグラウンドスレッドで RAG チェーンを実行して DB に保存する。
 
     st.write_stream() はスレッドから使えないため invoke_answer() を使用する。
-    完了・エラーどちらの場合も pending_sessions から session_id を削除する。
+    完了・エラーどちらの場合も _pending_sessions から session_id を削除する。
     """
     try:
         search_query = rag.contextualize_query(llm, question, chat_history)
@@ -65,7 +66,8 @@ def _run_chain(session_id: str, question: str, chat_history: list) -> None:
     except Exception:
         pass
     finally:
-        st.session_state.pending_sessions.discard(session_id)
+        with _pending_lock:
+            _pending_sessions.discard(session_id)
 
 
 # ── サイドバー：セッション一覧 ──────────────────────────────
@@ -101,7 +103,8 @@ with st.sidebar:
     for s in sessions:
         col1, col2 = st.columns([5, 1])
         is_active = s["id"] == st.session_state.session_id
-        is_pending = s["id"] in st.session_state.pending_sessions
+        with _pending_lock:
+            is_pending = s["id"] in _pending_sessions
         label = f"**{s['title']}**" if is_active else s["title"]
         if is_pending:
             label = f"⏳ {label}"
@@ -124,14 +127,16 @@ st.title("📓 Obsidian ノート検索")
 def _chat_area() -> None:
     """チャット表示エリア。1 秒ごとに DB を再取得して完了した回答を表示する。
 
-    pending_sessions に現在のセッションが含まれる間は生成中インジケーターを表示する。
+    _pending_sessions に現在のセッションが含まれる間は生成中インジケーターを表示する。
     """
     messages = get_messages(st.session_state.session_id)
     for msg in messages:
         with st.chat_message(msg["role"]):
             st.markdown(msg["content"])
 
-    if st.session_state.session_id in st.session_state.pending_sessions:
+    with _pending_lock:
+        is_pending = st.session_state.session_id in _pending_sessions
+    if is_pending:
         with st.chat_message("assistant"):
             st.markdown("⏳ 回答を生成中...")
 
@@ -154,7 +159,8 @@ if question := st.chat_input("Obsidian ノートに質問する..."):
         update_session_title(session_id, question[:40])
 
     # バックグラウンドスレッドで LLM 処理を実行
-    st.session_state.pending_sessions.add(session_id)
+    with _pending_lock:
+        _pending_sessions.add(session_id)
     threading.Thread(
         target=_run_chain,
         args=(session_id, question, chat_history),
