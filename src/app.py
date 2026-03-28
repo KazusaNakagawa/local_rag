@@ -1,16 +1,20 @@
 import os
 import sys
+import threading
 
 import streamlit as st
 from langchain_core.messages import HumanMessage, AIMessage
 
 sys.path.insert(0, os.path.dirname(__file__))
 from config import VECTORSTORE_PATH, PROJECT_ROOT, EMBED_MODEL, LLM_MODEL, CHAT_HISTORY_TURNS
-from db import init_db, create_session, list_sessions, delete_session, update_session_title, get_messages, AppChatMessageHistory, build_export_content, export_filename
+from db import (
+    init_db, create_session, list_sessions, delete_session, update_session_title,
+    get_messages, AppChatMessageHistory, save_message,
+    build_export_content, export_filename,
+)
 import rag
 
 DOCS_CACHE_PATH = os.path.join(PROJECT_ROOT, "data", "docs_cache.pkl")
-
 
 # DB 初期化
 init_db()
@@ -38,10 +42,31 @@ if llm is None:
     st.stop()
 
 # ── セッション初期化 ────────────────────────────────────────
-# 再起動後は直近セッションを復元し、存在しない場合のみ新規作成
 if "session_id" not in st.session_state:
     recent = list_sessions()
     st.session_state.session_id = recent[0]["id"] if recent else create_session()
+
+# バックグラウンド処理中のセッション ID を追跡する
+if "pending_sessions" not in st.session_state:
+    st.session_state.pending_sessions = set()
+
+
+def _run_chain(session_id: str, question: str, chat_history: list) -> None:
+    """バックグラウンドスレッドで RAG チェーンを実行して DB に保存する。
+
+    st.write_stream() はスレッドから使えないため invoke_answer() を使用する。
+    完了・エラーどちらの場合も pending_sessions から session_id を削除する。
+    """
+    try:
+        search_query = rag.contextualize_query(llm, question, chat_history)
+        source_docs = hybrid_retrieve(search_query)
+        answer = rag.invoke_answer(llm, question, chat_history, source_docs)
+        save_message(session_id, "assistant", answer)
+    except Exception:
+        pass
+    finally:
+        st.session_state.pending_sessions.discard(session_id)
+
 
 # ── サイドバー：セッション一覧 ──────────────────────────────
 with st.sidebar:
@@ -56,7 +81,10 @@ with st.sidebar:
 
     # 現在のセッションをエクスポート
     current_sessions = list_sessions()
-    current_title = next((s["title"] for s in current_sessions if s["id"] == st.session_state.session_id), "chat")
+    current_title = next(
+        (s["title"] for s in current_sessions if s["id"] == st.session_state.session_id),
+        "chat",
+    )
     export_content = build_export_content(st.session_state.session_id, current_title)
     st.download_button(
         label="📥 エクスポート",
@@ -73,7 +101,10 @@ with st.sidebar:
     for s in sessions:
         col1, col2 = st.columns([5, 1])
         is_active = s["id"] == st.session_state.session_id
+        is_pending = s["id"] in st.session_state.pending_sessions
         label = f"**{s['title']}**" if is_active else s["title"]
+        if is_pending:
+            label = f"⏳ {label}"
         if col1.button(label, key=f"sel_{s['id']}", use_container_width=True):
             st.session_state.session_id = s["id"]
             st.rerun()
@@ -84,52 +115,50 @@ with st.sidebar:
                 st.session_state.session_id = remaining[0]["id"] if remaining else create_session()
             st.rerun()
 
+
 # ── メインエリア ────────────────────────────────────────────
 st.title("📓 Obsidian ノート検索")
 
-# DB からメッセージ復元
-messages = get_messages(st.session_state.session_id)
-for msg in messages:
-    with st.chat_message(msg["role"]):
-        st.markdown(msg["content"])
+
+@st.fragment(run_every=1)
+def _chat_area() -> None:
+    """チャット表示エリア。1 秒ごとに DB を再取得して完了した回答を表示する。
+
+    pending_sessions に現在のセッションが含まれる間は生成中インジケーターを表示する。
+    """
+    messages = get_messages(st.session_state.session_id)
+    for msg in messages:
+        with st.chat_message(msg["role"]):
+            st.markdown(msg["content"])
+
+    if st.session_state.session_id in st.session_state.pending_sessions:
+        with st.chat_message("assistant"):
+            st.markdown("⏳ 回答を生成中...")
+
+
+_chat_area()
 
 # 入力欄
 if question := st.chat_input("Obsidian ノートに質問する..."):
-    history = AppChatMessageHistory(st.session_state.session_id, max_turns=CHAT_HISTORY_TURNS)
+    session_id = st.session_state.session_id
+
+    # 現在の会話履歴を取得（新しいユーザー質問は含まない）
+    history = AppChatMessageHistory(session_id, max_turns=CHAT_HISTORY_TURNS)
     chat_history = history.messages
     is_first_message = len(chat_history) == 0
 
-    with st.chat_message("user"):
-        st.markdown(question)
+    # ユーザーメッセージを即時 DB に保存（セッション切替が発生しても消えない）
+    save_message(session_id, "user", question)
 
     if is_first_message:
-        update_session_title(st.session_state.session_id, question[:40])
+        update_session_title(session_id, question[:40])
 
-    with st.chat_message("assistant"):
-        if chat_history:
-            with st.spinner("質問を解析中..."):
-                search_query = rag.contextualize_query(llm, question, chat_history)
-        else:
-            search_query = question
+    # バックグラウンドスレッドで LLM 処理を実行
+    st.session_state.pending_sessions.add(session_id)
+    threading.Thread(
+        target=_run_chain,
+        args=(session_id, question, chat_history),
+        daemon=True,
+    ).start()
 
-        with st.spinner("ノートを検索中..."):
-            source_docs = hybrid_retrieve(search_query)
-
-        answer = ""
-        try:
-            answer = st.write_stream(rag.stream_answer(llm, question, chat_history, source_docs))
-        except Exception:
-            st.error("回答の生成に失敗しました。Ollama が起動しているか確認してください。")
-            raise
-        finally:
-            history.add_message(HumanMessage(content=question))
-            if answer:
-                history.add_message(AIMessage(content=answer))
-
-        with st.expander("📎 参照したノート"):
-            for i, doc in enumerate(source_docs, 1):
-                source = doc.metadata.get("source", "不明")
-                filename = os.path.basename(source)
-                st.markdown(f"**{i}. {filename}**")
-                st.text(doc.page_content[:300] + "..." if len(doc.page_content) > 300 else doc.page_content)
-                st.divider()
+    st.rerun()

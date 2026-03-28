@@ -139,3 +139,14 @@ def stream_answer(llm, question: str, chat_history: list, docs: list):
     yield from (QA_PROMPT | llm | StrOutputParser()).stream(
         {"input": question, "chat_history": chat_history, "context": format_docs(docs)}
     )
+
+
+def invoke_answer(llm, question: str, chat_history: list, docs: list) -> str:
+    """QA チェーンを invoke で実行して回答全文を返す。
+
+    stream_answer() の代替。バックグラウンドスレッドから呼び出す場合など、
+    st.write_stream() が使えない状況で使用する。
+    """
+    return (QA_PROMPT | llm | StrOutputParser()).invoke(
+        {"input": question, "chat_history": chat_history, "context": format_docs(docs)}
+    )
