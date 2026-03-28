@@ -15,6 +15,24 @@ from config import VECTORSTORE_PATH, PROJECT_ROOT, EMBED_MODEL, LLM_MODEL, TOP_K
 from db import init_db, create_session, list_sessions, delete_session, update_session_title, save_message, get_messages, build_export_content, export_filename
 
 DOCS_CACHE_PATH = os.path.join(PROJECT_ROOT, "data", "docs_cache.pkl")
+DATA_DIR = os.path.join(PROJECT_ROOT, "data")
+
+
+def _assert_safe_path(path: str) -> None:
+    """ファイルパスがデータディレクトリ内の通常ファイルであることを検証する。
+
+    パストラバーサル・シンボリックリンク・ワールドライタブルを拒否する。
+    """
+    real = os.path.realpath(path)
+    data_real = os.path.realpath(DATA_DIR)
+    if not real.startswith(data_real + os.sep) and real != data_real:
+        raise ValueError(f"安全でないパス: {path}")
+    if os.path.islink(path):
+        raise ValueError(f"シンボリックリンクは許可されていません: {path}")
+    mode = os.stat(real).st_mode
+    if mode & 0o002:
+        raise ValueError(f"ワールドライタブルなファイルは読み込めません: {path}")
+
 
 PROMPT_TEMPLATE = """以下のコンテキストを参考に、質問に日本語で答えてください。
 コンテキストに情報がない場合は「ノートに該当する情報が見つかりませんでした」と答えてください。
@@ -37,6 +55,7 @@ def load_chain():
     if not os.path.exists(VECTORSTORE_PATH):
         return None, None
 
+    _assert_safe_path(VECTORSTORE_PATH)
     embeddings = OllamaEmbeddings(model=EMBED_MODEL)
     vectorstore = FAISS.load_local(
         VECTORSTORE_PATH, embeddings,
@@ -51,6 +70,7 @@ def load_chain():
     if os.path.exists(DOCS_CACHE_PATH):
         # docs_cache.pkl は ingest.py がローカルの Obsidian Vault から生成する
         # 信頼済みローカルファイルのため pickle デシリアライズは安全
+        _assert_safe_path(DOCS_CACHE_PATH)
         with open(DOCS_CACHE_PATH, "rb") as f:
             all_docs = pickle.load(f)
 
