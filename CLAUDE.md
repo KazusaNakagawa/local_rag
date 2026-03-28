@@ -61,8 +61,10 @@ User Query → Hybrid retrieval (BM25 + FAISS/MMR) → deduplicate → TOP_K=6 c
 |------|------|
 | `src/config.py` | Central config — all paths, model names, tuning params (edit here first) |
 | `src/ingest.py` | One-time vault ingestion; must re-run after vault changes |
-| `src/app.py` | Streamlit UI; hybrid retrieval, session management, export |
-| `src/query.py` | CLI interface using FAISS only (no BM25) |
+| `src/app.py` | Streamlit UI — thin layer delegating to rag.py, db/, log_config.py |
+| `src/rag.py` | RAG pipeline — load_resources, make_llm, hybrid retrieve, invoke_answer, stream_answer |
+| `src/query.py` | CLI interface — BM25 + FAISS hybrid (same pipeline as app.py) |
+| `src/log_config.py` | Logging setup — daily rotating file handler (logs/YYYYMMDD-app.log) |
 | `src/db/` | SQLite layer: `connection.py`, `models.py`, `session_repo.py`, `message_repo.py`, `export.py` |
 
 ### Hybrid Search (src/app.py)

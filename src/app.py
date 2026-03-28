@@ -60,9 +60,10 @@ if not os.path.exists(VECTORSTORE_PATH):
 if not os.path.exists(DOCS_CACHE_PATH):
     st.warning("BM25用のキャッシュがありません。`python ingest.py` を再実行してください。")
 
-hybrid_retrieve = _load_cached_resources()
-if hybrid_retrieve is None:
-    st.error("リソースのロードに失敗しました。`python ingest.py` を実行してください。")
+try:
+    hybrid_retrieve = _load_cached_resources()
+except Exception as e:
+    st.error(f"リソースのロードに失敗しました: {e}")
     st.stop()
 
 # ── セッション初期化 ────────────────────────────────────────
