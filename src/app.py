@@ -13,6 +13,7 @@ from langchain_ollama import ChatOllama, OllamaEmbeddings
 sys.path.insert(0, os.path.dirname(__file__))
 from config import VECTORSTORE_PATH, PROJECT_ROOT, EMBED_MODEL, LLM_MODEL, TOP_K, FETCH_K
 from db import init_db, create_session, list_sessions, delete_session, update_session_title, save_message, get_messages, build_export_content, export_filename
+from prompts import PROMPT_TEMPLATE
 
 DOCS_CACHE_PATH = os.path.join(PROJECT_ROOT, "data", "docs_cache.pkl")
 DATA_DIR = os.path.join(PROJECT_ROOT, "data")
@@ -33,19 +34,6 @@ def _assert_safe_path(path: str) -> None:
     if mode & 0o002:
         raise ValueError(f"ワールドライタブルなファイルは読み込めません: {path}")
 
-
-PROMPT_TEMPLATE = """以下のコンテキストを参考に、質問に日本語で答えてください。
-
-ルール:
-- コンテキストに直接的な答えがある場合はそれを使って答えてください。
-- 直接的な答えがなくても、関連する情報があれば「直接的な記録はありませんが、関連するメモとして〜」のように共有してください。
-- コンテキストに全く関連する情報がない場合のみ「ノートに該当する情報が見つかりませんでした」と答えてください。
-
-コンテキスト:
-{context}
-
-質問: {question}
-回答:"""
 
 # DB 初期化
 init_db()
@@ -104,8 +92,12 @@ def load_chain():
         return combined[:TOP_K]
 
     def format_docs(docs):
-        """ドキュメントのリストを改行区切りの文字列に整形する。"""
-        return "\n\n".join(doc.page_content for doc in docs)
+        """ドキュメントをソース名付きの構造化テキストに整形する。"""
+        chunks = []
+        for i, doc in enumerate(docs, 1):
+            source = os.path.basename(doc.metadata.get("source", "unknown"))
+            chunks.append(f"=== Source {i}: {source} ===\n{doc.page_content}\n---")
+        return "\n\n".join(chunks)
 
     llm = ChatOllama(model=LLM_MODEL, temperature=0.1)
     prompt = PromptTemplate(

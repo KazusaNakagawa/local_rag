@@ -6,23 +6,16 @@ from langchain_core.output_parsers import StrOutputParser
 import sys
 import os
 from config import VECTORSTORE_PATH, EMBED_MODEL, LLM_MODEL, TOP_K, FETCH_K
+from prompts import PROMPT_TEMPLATE
 
-PROMPT_TEMPLATE = """以下のコンテキストを参考に、質問に日本語で答えてください。
-
-ルール:
-- コンテキストに直接的な答えがある場合はそれを使って答えてください。
-- 直接的な答えがなくても、関連する情報があれば「直接的な記録はありませんが、関連するメモとして〜」のように共有してください。
-- コンテキストに全く関連する情報がない場合のみ「ノートに該当する情報が見つかりませんでした」と答えてください。
-
-コンテキスト:
-{context}
-
-質問: {question}
-回答:"""
 
 def format_docs(docs):
-    """ドキュメントのリストを改行区切りの文字列に整形する。"""
-    return "\n\n".join(doc.page_content for doc in docs)
+    """ドキュメントをソース名付きの構造化テキストに整形する。"""
+    chunks = []
+    for i, doc in enumerate(docs, 1):
+        source = os.path.basename(doc.metadata.get("source", "unknown"))
+        chunks.append(f"=== Source {i}: {source} ===\n{doc.page_content}\n---")
+    return "\n\n".join(chunks)
 
 def query(question: str):
     """ベクトルストアを使って質問に回答する。"""
