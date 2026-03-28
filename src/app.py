@@ -179,7 +179,8 @@ st.title("📓 Obsidian ノート検索")
 def _chat_area() -> None:
     """チャット表示エリア。1 秒ごとに DB を再取得して完了した回答を表示する。
 
-    _pending_sessions に現在のセッションが含まれる間は処理ステップを表示する。
+    pending 状態が True → False に変化した瞬間に st.rerun() でページ全体を
+    再実行し、フラグメント外の st.chat_input を有効状態に戻す。
     """
     shared = _get_shared_state()
     messages = get_messages(st.session_state.session_id)
@@ -194,6 +195,14 @@ def _chat_area() -> None:
     if is_pending:
         with st.chat_message("assistant"):
             st.markdown(f"⏳ {status_msg}")
+
+    # pending → 完了 の遷移を検知してページ全体をリランする
+    # これにより st.chat_input が再評価されて入力欄が有効に戻る
+    was_pending = st.session_state.get("_chat_was_pending", False)
+    st.session_state._chat_was_pending = is_pending
+    if was_pending and not is_pending:
+        logger.info("[chat_area] processing complete — triggering full rerun to re-enable input")
+        st.rerun()
 
 
 _chat_area()
