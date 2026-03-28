@@ -38,17 +38,21 @@ def query(question: str):
     llm = ChatOllama(model=LLM_MODEL, temperature=0.1)
     prompt = PromptTemplate(
         template=PROMPT_TEMPLATE,
-        input_variables=["context", "question"]
+        input_variables=["context", "chat_history", "question"]
     )
 
     chain = (
-        {"context": retriever | format_docs, "question": RunnablePassthrough()}
+        {
+            "context": lambda d: format_docs(retriever.invoke(d["question"])),
+            "chat_history": lambda d: d["chat_history"],
+            "question": lambda d: d["question"],
+        }
         | prompt
         | llm
         | StrOutputParser()
     )
 
-    result = chain.invoke(question)
+    result = chain.invoke({"question": question, "chat_history": ""})
     print("💬 回答:")
     print(result)
 

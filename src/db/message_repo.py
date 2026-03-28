@@ -19,3 +19,16 @@ def get_messages(session_id: str) -> list[dict]:
             (session_id,),
         ).fetchall()
     return [dict(row) for row in rows]
+
+
+def get_recent_messages(session_id: str, n_turns: int) -> list[dict]:
+    """直近 n_turns ターン分のメッセージを時系列順で返す。"""
+    with get_connection() as conn:
+        rows = conn.execute(
+            "SELECT role, content FROM ("
+            "  SELECT role, content, id FROM messages"
+            "  WHERE session_id = ? ORDER BY id DESC LIMIT ?"
+            ") ORDER BY id ASC",
+            (session_id, n_turns * 2),
+        ).fetchall()
+    return [dict(row) for row in rows]

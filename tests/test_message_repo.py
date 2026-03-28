@@ -1,7 +1,7 @@
 import sqlite3
 import pytest
 from db.session_repo import create_session, delete_session
-from db.message_repo import save_message, get_messages
+from db.message_repo import save_message, get_messages, get_recent_messages
 
 
 def test_save_and_get_messages(tmp_db):
@@ -54,3 +54,32 @@ def test_invalid_role_raises(tmp_db):
     session_id = create_session()
     with pytest.raises(sqlite3.IntegrityError):
         save_message(session_id, "invalid_role", "テスト")
+
+
+def test_get_recent_messages_returns_last_n_turns(tmp_db):
+    session_id = create_session()
+    for i in range(1, 4):
+        save_message(session_id, "user", f"Q{i}")
+        save_message(session_id, "assistant", f"A{i}")
+
+    recent = get_recent_messages(session_id, 2)
+    assert len(recent) == 4
+    assert recent[0]["content"] == "Q2"
+    assert recent[1]["content"] == "A2"
+    assert recent[2]["content"] == "Q3"
+    assert recent[3]["content"] == "A3"
+
+
+def test_get_recent_messages_fewer_than_n_turns(tmp_db):
+    session_id = create_session()
+    save_message(session_id, "user", "Q1")
+    save_message(session_id, "assistant", "A1")
+
+    recent = get_recent_messages(session_id, 5)
+    assert len(recent) == 2
+    assert recent[0]["content"] == "Q1"
+
+
+def test_get_recent_messages_empty(tmp_db):
+    session_id = create_session()
+    assert get_recent_messages(session_id, 5) == []

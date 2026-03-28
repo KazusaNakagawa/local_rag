@@ -1,7 +1,7 @@
 from .connection import get_connection
 from .models import init_db
 from .session_repo import create_session, list_sessions, delete_session, update_session_title
-from .message_repo import save_message, get_messages
+from .message_repo import save_message, get_messages, get_recent_messages
 from .export import build_export_content, export_filename
 
 __all__ = [
@@ -11,6 +11,7 @@ __all__ = [
     "export_filename",
     "get_connection",
     "get_messages",
+    "get_recent_messages",
     "init_db",
     "list_sessions",
     "save_message",

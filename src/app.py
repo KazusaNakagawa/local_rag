@@ -11,8 +11,8 @@ from langchain_core.runnables import RunnablePassthrough
 from langchain_ollama import ChatOllama, OllamaEmbeddings
 
 sys.path.insert(0, os.path.dirname(__file__))
-from config import VECTORSTORE_PATH, PROJECT_ROOT, EMBED_MODEL, LLM_MODEL, TOP_K, FETCH_K
-from db import init_db, create_session, list_sessions, delete_session, update_session_title, save_message, get_messages, build_export_content, export_filename
+from config import VECTORSTORE_PATH, PROJECT_ROOT, EMBED_MODEL, LLM_MODEL, TOP_K, FETCH_K, CHAT_HISTORY_TURNS
+from db import init_db, create_session, list_sessions, delete_session, update_session_title, save_message, get_messages, get_recent_messages, build_export_content, export_filename
 from prompts import PROMPT_TEMPLATE
 
 DOCS_CACHE_PATH = os.path.join(PROJECT_ROOT, "data", "docs_cache.pkl")
@@ -102,15 +102,30 @@ def load_chain():
     llm = ChatOllama(model=LLM_MODEL, temperature=0.1)
     prompt = PromptTemplate(
         template=PROMPT_TEMPLATE,
-        input_variables=["context", "question"],
+        input_variables=["context", "chat_history", "question"],
     )
     chain = (
-        {"context": lambda q: format_docs(hybrid_retrieve(q)), "question": RunnablePassthrough()}
+        {
+            "context": lambda d: format_docs(hybrid_retrieve(d["question"])),
+            "chat_history": lambda d: d["chat_history"],
+            "question": lambda d: d["question"],
+        }
         | prompt
         | llm
         | StrOutputParser()
     )
     return chain, hybrid_retrieve
+
+
+def format_chat_history(messages: list[dict]) -> str:
+    """メッセージリストを LLM に渡す会話履歴テキストに整形する。"""
+    if not messages:
+        return "(なし)"
+    lines = []
+    for msg in messages:
+        role = "ユーザー" if msg["role"] == "user" else "アシスタント"
+        lines.append(f"{role}: {msg['content']}")
+    return "\n".join(lines)
 
 
 # ── ベクトルストア存在チェック ──────────────────────────────
@@ -181,6 +196,7 @@ for msg in messages:
 
 # 入力欄
 if question := st.chat_input("Obsidian ノートに質問する..."):
+    recent_history = get_recent_messages(st.session_state.session_id, CHAT_HISTORY_TURNS)
     save_message(st.session_state.session_id, "user", question)
     with st.chat_message("user"):
         st.markdown(question)
@@ -193,7 +209,10 @@ if question := st.chat_input("Obsidian ノートに質問する..."):
 
     with st.chat_message("assistant"):
         with st.spinner("考え中..."):
-            answer = chain.invoke(question)
+            answer = chain.invoke({
+                "question": question,
+                "chat_history": format_chat_history(recent_history),
+            })
         st.markdown(answer)
 
         with st.expander("📎 参照したノート"):
