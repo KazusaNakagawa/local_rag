@@ -1,7 +1,8 @@
 import sqlite3
 import pytest
+from langchain_core.messages import HumanMessage, AIMessage
 from db.session_repo import create_session, delete_session
-from db.message_repo import save_message, get_messages
+from db.message_repo import save_message, get_messages, AppChatMessageHistory
 
 
 def test_save_and_get_messages(tmp_db):
@@ -54,3 +55,113 @@ def test_invalid_role_raises(tmp_db):
     session_id = create_session()
     with pytest.raises(sqlite3.IntegrityError):
         save_message(session_id, "invalid_role", "テスト")
+
+
+# ── AppChatMessageHistory ──────────────────────────────────
+
+def test_app_chat_message_history_messages(tmp_db):
+    session_id = create_session()
+    save_message(session_id, "user", "こんにちは")
+    save_message(session_id, "assistant", "はい")
+
+    history = AppChatMessageHistory(session_id)
+    msgs = history.messages
+    assert len(msgs) == 2
+    assert isinstance(msgs[0], HumanMessage)
+    assert msgs[0].content == "こんにちは"
+    assert isinstance(msgs[1], AIMessage)
+    assert msgs[1].content == "はい"
+
+
+def test_app_chat_message_history_add_message(tmp_db):
+    session_id = create_session()
+    history = AppChatMessageHistory(session_id)
+    history.add_message(HumanMessage(content="質問"))
+    history.add_message(AIMessage(content="回答"))
+
+    rows = get_messages(session_id)
+    assert len(rows) == 2
+    assert rows[0]["role"] == "user"
+    assert rows[0]["content"] == "質問"
+    assert rows[1]["role"] == "assistant"
+    assert rows[1]["content"] == "回答"
+
+
+def test_app_chat_message_history_empty(tmp_db):
+    session_id = create_session()
+    history = AppChatMessageHistory(session_id)
+    assert history.messages == []
+
+
+def test_app_chat_message_history_reflects_db(tmp_db):
+    """履歴は DB の現在状態をそのまま反映する（キャッシュなし）。"""
+    session_id = create_session()
+    history = AppChatMessageHistory(session_id)
+    assert len(history.messages) == 0
+
+    save_message(session_id, "user", "追加")
+    assert len(history.messages) == 1
+
+
+def test_app_chat_message_history_clear_is_noop(tmp_db):
+    """clear() は no-op — メッセージ削除は delete_session() で行う。"""
+    session_id = create_session()
+    save_message(session_id, "user", "テスト")
+    history = AppChatMessageHistory(session_id)
+    history.clear()
+    assert len(history.messages) == 1
+
+
+def test_app_chat_message_history_max_turns(tmp_db):
+    """max_turns を指定すると直近 N ターン分のみ返す。"""
+    session_id = create_session()
+    for i in range(1, 4):
+        save_message(session_id, "user", f"Q{i}")
+        save_message(session_id, "assistant", f"A{i}")
+
+    history = AppChatMessageHistory(session_id, max_turns=2)
+    msgs = history.messages
+    assert len(msgs) == 4
+    assert msgs[0].content == "Q2"
+    assert msgs[-1].content == "A3"
+
+
+def test_chain_integration_followup(tmp_db):
+    """AppChatMessageHistory を組み込んだチェーンでフォローアップ質問が履歴を参照する。"""
+    import sys, os
+    sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
+
+    from langchain_core.language_models.fake import FakeListLLM
+    from langchain_core.output_parsers import StrOutputParser
+    from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
+
+    session_id = create_session()
+    history = AppChatMessageHistory(session_id)
+
+    qa_prompt = ChatPromptTemplate.from_messages([
+        ("system", "コンテキスト: {context}"),
+        MessagesPlaceholder("chat_history"),
+        ("human", "{input}"),
+    ])
+
+    def run_turn(question: str, context: str = "テストコンテキスト") -> str:
+        llm = FakeListLLM(responses=["スタブ回答"])
+        chain = qa_prompt | llm | StrOutputParser()
+        chat_history = history.messages
+        answer = chain.invoke({"input": question, "chat_history": chat_history, "context": context})
+        history.add_message(HumanMessage(content=question))
+        history.add_message(AIMessage(content=answer))
+        return answer
+
+    # 1ターン目
+    answer1 = run_turn("最初の質問")
+    assert answer1 == "スタブ回答"
+    assert len(history.messages) == 2
+
+    # 2ターン目：履歴に1ターン目が含まれる
+    answer2 = run_turn("フォローアップ質問")
+    assert answer2 == "スタブ回答"
+    msgs = history.messages
+    assert len(msgs) == 4
+    assert msgs[0].content == "最初の質問"
+    assert msgs[2].content == "フォローアップ質問"

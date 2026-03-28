@@ -1,3 +1,6 @@
+from langchain_core.chat_history import BaseChatMessageHistory
+from langchain_core.messages import BaseMessage, HumanMessage, AIMessage
+
 from .connection import get_connection
 
 
@@ -19,3 +22,34 @@ def get_messages(session_id: str) -> list[dict]:
             (session_id,),
         ).fetchall()
     return [dict(row) for row in rows]
+
+
+class AppChatMessageHistory(BaseChatMessageHistory):
+    """既存の messages テーブルを LangChain の BaseChatMessageHistory インターフェースで包むクラス。
+
+    セッションごとに履歴の読み書きを行い、ストリーミング応答完了後に保存する。
+    """
+
+    def __init__(self, session_id: str, max_turns: int | None = None) -> None:
+        self.session_id = session_id
+        self.max_turns = max_turns  # None で全件、n で直近 n ターン分に制限
+
+    @property
+    def messages(self) -> list[BaseMessage]:
+        rows = get_messages(self.session_id)
+        if self.max_turns is not None:
+            rows = rows[-(self.max_turns * 2):]
+        result = []
+        for row in rows:
+            if row["role"] == "user":
+                result.append(HumanMessage(content=row["content"]))
+            else:
+                result.append(AIMessage(content=row["content"]))
+        return result
+
+    def add_message(self, message: BaseMessage) -> None:
+        role = "user" if isinstance(message, HumanMessage) else "assistant"
+        save_message(self.session_id, role, message.content)
+
+    def clear(self) -> None:
+        """セッション内メッセージの全削除は delete_session() で行うため未使用。"""
