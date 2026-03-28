@@ -15,7 +15,7 @@ def get_messages(session_id: str) -> list[dict]:
     with get_connection() as conn:
         rows = conn.execute(
             "SELECT role, content, created_at FROM messages "
-            "WHERE session_id = ? ORDER BY created_at ASC",
+            "WHERE session_id = ? ORDER BY created_at ASC, id ASC",
             (session_id,),
         ).fetchall()
     return [dict(row) for row in rows]

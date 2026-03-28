@@ -1,6 +1,5 @@
 from datetime import datetime
 from .message_repo import get_messages
-from .session_repo import list_sessions
 
 
 def build_export_content(session_id: str, title: str) -> str:

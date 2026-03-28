@@ -128,7 +128,7 @@ with st.sidebar:
     st.download_button(
         label="📥 エクスポート",
         data=export_content.encode("utf-8"),
-        file_name=export_filename(),
+        file_name=export_filename(),  # レンダリング時に確定、変数切り出し不要
         mime="text/markdown",
         use_container_width=True,
     )
