@@ -5,14 +5,13 @@ import sys
 import streamlit as st
 from langchain_community.retrievers import BM25Retriever
 from langchain_community.vectorstores import FAISS
+from langchain_core.messages import HumanMessage, AIMessage
 from langchain_core.output_parsers import StrOutputParser
-from langchain_core.runnables import RunnableLambda
-from langchain_core.runnables.history import RunnableWithMessageHistory
 from langchain_ollama import ChatOllama, OllamaEmbeddings
 
 sys.path.insert(0, os.path.dirname(__file__))
 from config import VECTORSTORE_PATH, PROJECT_ROOT, EMBED_MODEL, LLM_MODEL, TOP_K, FETCH_K
-from db import init_db, create_session, list_sessions, delete_session, update_session_title, save_message, get_messages, AppChatMessageHistory, build_export_content, export_filename
+from db import init_db, create_session, list_sessions, delete_session, update_session_title, get_messages, AppChatMessageHistory, build_export_content, export_filename
 from prompts import CONTEXTUALIZE_PROMPT, QA_PROMPT
 
 DOCS_CACHE_PATH = os.path.join(PROJECT_ROOT, "data", "docs_cache.pkl")
@@ -35,6 +34,15 @@ def _assert_safe_path(path: str) -> None:
         raise ValueError(f"ワールドライタブルなファイルは読み込めません: {path}")
 
 
+def format_docs(docs) -> str:
+    """ドキュメントをソース名付きの構造化テキストに整形する。"""
+    chunks = []
+    for i, doc in enumerate(docs, 1):
+        source = os.path.basename(doc.metadata.get("source", "unknown"))
+        chunks.append(f"=== Source {i}: {source} ===\n{doc.page_content}\n---")
+    return "\n\n".join(chunks)
+
+
 # DB 初期化
 init_db()
 
@@ -42,10 +50,10 @@ st.set_page_config(page_title="Obsidian RAG", page_icon="📓", layout="wide")
 
 
 @st.cache_resource
-def load_chain():
-    """FAISS と BM25 のハイブリッドリトリーバーと LLM チェーンをロードして返す。"""
+def load_resources():
+    """FAISS・BM25・LLM をロードしてキャッシュする。"""
     if not os.path.exists(VECTORSTORE_PATH):
-        return None
+        return None, None
 
     _assert_safe_path(VECTORSTORE_PATH)
     embeddings = OllamaEmbeddings(model=EMBED_MODEL)
@@ -89,52 +97,10 @@ def load_chain():
             if key not in seen:
                 seen.add(key)
                 combined.append(doc)
-        docs = combined[:TOP_K]
-        for doc in docs:
-            doc.metadata["source_name"] = os.path.basename(doc.metadata.get("source", "unknown"))
-        return docs
+        return combined[:TOP_K]
 
     llm = ChatOllama(model=LLM_MODEL, temperature=0.1)
-    contextualize_chain = CONTEXTUALIZE_PROMPT | llm | StrOutputParser()
-
-    def format_docs(docs):
-        chunks = []
-        for i, doc in enumerate(docs, 1):
-            source = os.path.basename(doc.metadata.get("source", "unknown"))
-            chunks.append(f"=== Source {i}: {source} ===\n{doc.page_content}\n---")
-        return "\n\n".join(chunks)
-
-    def rag_pipeline(inputs: dict) -> dict:
-        """2ステップ RAG: 質問の文脈補完 → ハイブリッド検索 → 回答生成。"""
-        question = inputs["input"]
-        chat_history = inputs.get("chat_history", [])
-
-        # Step 1: 会話履歴がある場合はフォローアップ質問を単独の質問に言い換え
-        if chat_history:
-            search_query = contextualize_chain.invoke(
-                {"input": question, "chat_history": chat_history}
-            )
-        else:
-            search_query = question
-
-        # Step 2: 言い換えた質問でハイブリッド検索
-        docs = hybrid_retrieve(search_query)
-
-        # Step 3: 取得ドキュメント + 会話履歴 + 質問 → 回答生成
-        answer = (QA_PROMPT | llm | StrOutputParser()).invoke(
-            {"input": question, "chat_history": chat_history, "context": format_docs(docs)}
-        )
-        return {"answer": answer, "context": docs}
-
-    # 既存 DB をそのまま使う履歴管理でラップ
-    chain_with_history = RunnableWithMessageHistory(
-        RunnableLambda(rag_pipeline),
-        lambda session_id: AppChatMessageHistory(session_id),
-        input_messages_key="input",
-        history_messages_key="chat_history",
-        output_messages_key="answer",
-    )
-    return chain_with_history
+    return llm, hybrid_retrieve
 
 
 # ── ベクトルストア存在チェック ──────────────────────────────
@@ -145,7 +111,7 @@ if not os.path.exists(VECTORSTORE_PATH):
 if not os.path.exists(DOCS_CACHE_PATH):
     st.warning("BM25用のキャッシュがありません。`python ingest.py` を再実行してください。")
 
-chain_with_history = load_chain()
+llm, hybrid_retrieve = load_resources()
 
 # ── セッション初期化 ────────────────────────────────────────
 # 再起動後は直近セッションを復元し、存在しない場合のみ新規作成
@@ -205,24 +171,36 @@ for msg in messages:
 
 # 入力欄
 if question := st.chat_input("Obsidian ノートに質問する..."):
-    is_first_message = len(messages) == 0
+    history = AppChatMessageHistory(st.session_state.session_id)
+    chat_history = history.messages  # 現在の履歴を取得（今回の質問は含まない）
+    is_first_message = len(chat_history) == 0
 
     with st.chat_message("user"):
         st.markdown(question)
 
-    # 最初のメッセージをセッションタイトルに使用
     if is_first_message:
         update_session_title(st.session_state.session_id, question[:40])
 
     with st.chat_message("assistant"):
-        with st.spinner("考え中..."):
-            result = chain_with_history.invoke(
-                {"input": question},
-                config={"configurable": {"session_id": st.session_state.session_id}},
+        # Step 1: 会話履歴がある場合はフォローアップ質問を単独の質問に言い換え
+        if chat_history:
+            with st.spinner("質問を解析中..."):
+                search_query = (CONTEXTUALIZE_PROMPT | llm | StrOutputParser()).invoke(
+                    {"input": question, "chat_history": chat_history}
+                )
+        else:
+            search_query = question
+
+        # Step 2: 言い換えた質問でハイブリッド検索
+        with st.spinner("ノートを検索中..."):
+            source_docs = hybrid_retrieve(search_query)
+
+        # Step 3: 回答をストリーミング出力
+        answer = st.write_stream(
+            (QA_PROMPT | llm | StrOutputParser()).stream(
+                {"input": question, "chat_history": chat_history, "context": format_docs(source_docs)}
             )
-        answer = result["answer"]
-        source_docs = result["context"]
-        st.markdown(answer)
+        )
 
         with st.expander("📎 参照したノート"):
             for i, doc in enumerate(source_docs, 1):
@@ -231,3 +209,7 @@ if question := st.chat_input("Obsidian ノートに質問する..."):
                 st.markdown(f"**{i}. {filename}**")
                 st.text(doc.page_content[:300] + "..." if len(doc.page_content) > 300 else doc.page_content)
                 st.divider()
+
+    # 回答完了後に DB へ保存
+    history.add_message(HumanMessage(content=question))
+    history.add_message(AIMessage(content=answer))
