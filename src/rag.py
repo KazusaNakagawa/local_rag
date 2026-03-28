@@ -7,11 +7,30 @@ import pickle
 
 from langchain_community.retrievers import BM25Retriever
 from langchain_community.vectorstores import FAISS
+from langchain_core.documents import Document
 from langchain_core.output_parsers import StrOutputParser
 from langchain_ollama import ChatOllama, OllamaEmbeddings
 
-from config import EMBED_MODEL, LLM_MODEL, TOP_K, FETCH_K
+from config import EMBED_MODEL, LLM_MODEL, TOP_K, FETCH_K, PROJECT_ROOT
 from prompts import CONTEXTUALIZE_PROMPT, QA_PROMPT
+
+_DATA_DIR = os.path.join(PROJECT_ROOT, "data")
+
+
+def _assert_safe_path(path: str) -> None:
+    """ファイルパスがデータディレクトリ内の通常ファイルであることを検証する。
+
+    パストラバーサル・シンボリックリンク・ワールドライタブルを拒否する。
+    """
+    real = os.path.realpath(path)
+    data_real = os.path.realpath(_DATA_DIR)
+    if not real.startswith(data_real + os.sep) and real != data_real:
+        raise ValueError(f"安全でないパス: {path}")
+    if os.path.islink(path):
+        raise ValueError(f"シンボリックリンクは許可されていません: {path}")
+    mode = os.stat(real).st_mode
+    if mode & 0o002:
+        raise ValueError(f"ワールドライタブルなファイルは読み込めません: {path}")
 
 
 def _japanese_tokenizer(text: str) -> list[str]:
@@ -59,6 +78,10 @@ def load_resources(
             "パスが信頼済みのローカルファイルであることを確認してから呼び出してください。"
         )
 
+    _assert_safe_path(vectorstore_path)
+    if docs_cache_path and os.path.exists(docs_cache_path):
+        _assert_safe_path(docs_cache_path)
+
     embeddings = OllamaEmbeddings(model=EMBED_MODEL)
     vectorstore = FAISS.load_local(
         vectorstore_path, embeddings,
@@ -90,7 +113,7 @@ def load_resources(
     return llm, hybrid_retrieve
 
 
-def format_docs(docs) -> str:
+def format_docs(docs: list[Document]) -> str:
     """ドキュメントをソース名付きの構造化テキストに整形する。"""
     chunks = []
     for i, doc in enumerate(docs, 1):

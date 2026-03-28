@@ -10,23 +10,6 @@ from db import init_db, create_session, list_sessions, delete_session, update_se
 import rag
 
 DOCS_CACHE_PATH = os.path.join(PROJECT_ROOT, "data", "docs_cache.pkl")
-DATA_DIR = os.path.join(PROJECT_ROOT, "data")
-
-
-def _assert_safe_path(path: str) -> None:
-    """ファイルパスがデータディレクトリ内の通常ファイルであることを検証する。
-
-    パストラバーサル・シンボリックリンク・ワールドライタブルを拒否する。
-    """
-    real = os.path.realpath(path)
-    data_real = os.path.realpath(DATA_DIR)
-    if not real.startswith(data_real + os.sep) and real != data_real:
-        raise ValueError(f"安全でないパス: {path}")
-    if os.path.islink(path):
-        raise ValueError(f"シンボリックリンクは許可されていません: {path}")
-    mode = os.stat(real).st_mode
-    if mode & 0o002:
-        raise ValueError(f"ワールドライタブルなファイルは読み込めません: {path}")
 
 
 # DB 初期化
@@ -37,10 +20,7 @@ st.set_page_config(page_title="Obsidian RAG", page_icon="📓", layout="wide")
 
 @st.cache_resource
 def _load_cached_resources():
-    """パス検証後に RAG リソースをロードしてキャッシュする。"""
-    _assert_safe_path(VECTORSTORE_PATH)
-    if os.path.exists(DOCS_CACHE_PATH):
-        _assert_safe_path(DOCS_CACHE_PATH)
+    """RAG リソースをロードしてキャッシュする。パス検証は load_resources() 内で実施。"""
     return rag.load_resources(VECTORSTORE_PATH, DOCS_CACHE_PATH, allow_deserialization=True)
 
 
