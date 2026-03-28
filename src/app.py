@@ -1,3 +1,4 @@
+import logging
 import os
 import sys
 import threading
@@ -16,15 +17,30 @@ import rag
 
 DOCS_CACHE_PATH = os.path.join(PROJECT_ROOT, "data", "docs_cache.pkl")
 
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
+)
+logger = logging.getLogger(__name__)
+
 # DB 初期化
 init_db()
 
 st.set_page_config(page_title="Obsidian RAG", page_icon="📓", layout="wide")
 
-# バックグラウンドスレッドと Streamlit UI の両方から安全にアクセスできるよう
-# モジュールレベルの set で管理する（st.session_state はスレッドから参照不可）
-_pending_sessions: set[str] = set()
-_pending_lock = threading.Lock()
+
+@st.cache_resource
+def _get_shared_state() -> dict:
+    """Streamlit の rerun をまたいで保持するサーバーグローバルな状態。
+
+    st.session_state はスレッドから参照できないため、バックグラウンドスレッドと
+    UI スレッドの共有データをここで管理する。
+    """
+    return {
+        "pending": set(),          # 処理中の session_id の集合
+        "lock": threading.Lock(),  # pending・status の排他制御
+        "status": {},              # session_id -> 現在の処理ステップ名
+    }
 
 
 @st.cache_resource
@@ -55,19 +71,43 @@ if "session_id" not in st.session_state:
 def _run_chain(session_id: str, question: str, chat_history: list) -> None:
     """バックグラウンドスレッドで RAG チェーンを実行して DB に保存する。
 
-    st.write_stream() はスレッドから使えないため invoke_answer() を使用する。
-    完了・エラーどちらの場合も _pending_sessions から session_id を削除する。
+    各ステップで logger と shared["status"] を更新し、処理状況を追跡できるようにする。
     """
+    shared = _get_shared_state()
+    sid = session_id[:8]
+
+    def _set_status(msg: str) -> None:
+        with shared["lock"]:
+            shared["status"][session_id] = msg
+
     try:
+        logger.info("[%s] chain start — question: %.60s", sid, question)
+
+        _set_status("質問を解析中...")
+        logger.info("[%s] contextualize_query start", sid)
         search_query = rag.contextualize_query(llm, question, chat_history)
+        logger.info("[%s] contextualize_query done → %.60s", sid, search_query)
+
+        _set_status("ノートを検索中...")
+        logger.info("[%s] hybrid_retrieve start", sid)
         source_docs = hybrid_retrieve(search_query)
+        logger.info("[%s] hybrid_retrieve done → %d docs", sid, len(source_docs))
+
+        _set_status("回答を生成中...")
+        logger.info("[%s] invoke_answer start", sid)
         answer = rag.invoke_answer(llm, question, chat_history, source_docs)
+        logger.info("[%s] invoke_answer done → %d chars", sid, len(answer))
+
         save_message(session_id, "assistant", answer)
-    except Exception:
-        pass
+        logger.info("[%s] answer saved to DB", sid)
+
+    except Exception as e:
+        logger.exception("[%s] chain failed: %s", sid, e)
     finally:
-        with _pending_lock:
-            _pending_sessions.discard(session_id)
+        with shared["lock"]:
+            shared["pending"].discard(session_id)
+            shared["status"].pop(session_id, None)
+        logger.info("[%s] chain finished (pending removed)", sid)
 
 
 # ── サイドバー：セッション一覧 ──────────────────────────────
@@ -99,12 +139,13 @@ with st.sidebar:
     st.divider()
     st.markdown("#### 履歴")
 
+    shared = _get_shared_state()
     sessions = current_sessions
     for s in sessions:
         col1, col2 = st.columns([5, 1])
         is_active = s["id"] == st.session_state.session_id
-        with _pending_lock:
-            is_pending = s["id"] in _pending_sessions
+        with shared["lock"]:
+            is_pending = s["id"] in shared["pending"]
         label = f"**{s['title']}**" if is_active else s["title"]
         if is_pending:
             label = f"⏳ {label}"
@@ -127,18 +168,21 @@ st.title("📓 Obsidian ノート検索")
 def _chat_area() -> None:
     """チャット表示エリア。1 秒ごとに DB を再取得して完了した回答を表示する。
 
-    _pending_sessions に現在のセッションが含まれる間は生成中インジケーターを表示する。
+    _pending_sessions に現在のセッションが含まれる間は処理ステップを表示する。
     """
+    shared = _get_shared_state()
     messages = get_messages(st.session_state.session_id)
     for msg in messages:
         with st.chat_message(msg["role"]):
             st.markdown(msg["content"])
 
-    with _pending_lock:
-        is_pending = st.session_state.session_id in _pending_sessions
+    with shared["lock"]:
+        is_pending = st.session_state.session_id in shared["pending"]
+        status_msg = shared["status"].get(st.session_state.session_id, "処理中...")
+
     if is_pending:
         with st.chat_message("assistant"):
-            st.markdown("⏳ 回答を生成中...")
+            st.markdown(f"⏳ {status_msg}")
 
 
 _chat_area()
@@ -146,6 +190,9 @@ _chat_area()
 # 入力欄
 if question := st.chat_input("Obsidian ノートに質問する..."):
     session_id = st.session_state.session_id
+    shared = _get_shared_state()
+
+    logger.info("[%s] user submitted: %.60s", session_id[:8], question)
 
     # 現在の会話履歴を取得（新しいユーザー質問は含まない）
     history = AppChatMessageHistory(session_id, max_turns=CHAT_HISTORY_TURNS)
@@ -154,17 +201,21 @@ if question := st.chat_input("Obsidian ノートに質問する..."):
 
     # ユーザーメッセージを即時 DB に保存（セッション切替が発生しても消えない）
     save_message(session_id, "user", question)
+    logger.info("[%s] user message saved to DB", session_id[:8])
 
     if is_first_message:
         update_session_title(session_id, question[:40])
 
     # バックグラウンドスレッドで LLM 処理を実行
-    with _pending_lock:
-        _pending_sessions.add(session_id)
+    with shared["lock"]:
+        shared["pending"].add(session_id)
+        shared["status"][session_id] = "質問を解析中..."
+
     threading.Thread(
         target=_run_chain,
         args=(session_id, question, chat_history),
         daemon=True,
     ).start()
+    logger.info("[%s] background thread started", session_id[:8])
 
     st.rerun()
