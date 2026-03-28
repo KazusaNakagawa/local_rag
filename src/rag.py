@@ -109,8 +109,16 @@ def load_resources(
         bm25_docs = bm25_retriever.invoke(question)
         return _merge_results(bm25_docs, faiss_docs, TOP_K)
 
-    llm = ChatOllama(model=LLM_MODEL, temperature=0.1)
-    return llm, hybrid_retrieve
+    return hybrid_retrieve
+
+
+def make_llm() -> ChatOllama:
+    """呼び出しごとに新しい ChatOllama インスタンスを返す。
+
+    ChatOllama は同一インスタンスを複数スレッドで共有すると安全でないため、
+    バックグラウンドスレッドから呼び出す際は必ずこの関数で取得する。
+    """
+    return ChatOllama(model=LLM_MODEL, temperature=0.1)
 
 
 def format_docs(docs: list[Document]) -> str:
@@ -137,5 +145,16 @@ def contextualize_query(llm, question: str, chat_history: list) -> str:
 def stream_answer(llm, question: str, chat_history: list, docs: list):
     """QA チェーンの回答をトークン単位でストリーム返却するジェネレータ。"""
     yield from (QA_PROMPT | llm | StrOutputParser()).stream(
+        {"input": question, "chat_history": chat_history, "context": format_docs(docs)}
+    )
+
+
+def invoke_answer(llm, question: str, chat_history: list, docs: list) -> str:
+    """QA チェーンを invoke で実行して回答全文を返す。
+
+    stream_answer() の代替。バックグラウンドスレッドから呼び出す場合など、
+    st.write_stream() が使えない状況で使用する。
+    """
+    return (QA_PROMPT | llm | StrOutputParser()).invoke(
         {"input": question, "chat_history": chat_history, "context": format_docs(docs)}
     )

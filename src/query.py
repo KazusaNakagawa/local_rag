@@ -15,9 +15,10 @@ def query(question: str) -> None:
 
     print(f"🔍 質問: {question}\n")
 
-    llm, retrieve = rag.load_resources(
+    retrieve = rag.load_resources(
         VECTORSTORE_PATH, DOCS_CACHE_PATH, allow_deserialization=True
     )
+    llm = rag.make_llm()
     docs = retrieve(question)
     print("💬 回答:")
     for chunk in rag.stream_answer(llm, question, [], docs):

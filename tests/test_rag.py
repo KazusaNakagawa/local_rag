@@ -8,7 +8,7 @@ from langchain_core.documents import Document
 from langchain_core.language_models.fake import FakeListLLM
 from langchain_core.messages import HumanMessage, AIMessage
 
-from rag import format_docs, contextualize_query, stream_answer, _merge_results, load_resources
+from rag import format_docs, contextualize_query, stream_answer, invoke_answer, _merge_results, load_resources, make_llm
 
 
 # ── load_resources ────────────────────────────────────────
@@ -17,6 +17,15 @@ def test_load_resources_requires_allow_deserialization():
     """allow_deserialization=False (デフォルト) では ValueError を送出する。"""
     with pytest.raises(ValueError, match="allow_deserialization"):
         load_resources("/any/path")
+
+
+def test_make_llm_returns_new_instance():
+    """make_llm() は呼び出しごとに別インスタンスを返す。"""
+    from langchain_ollama import ChatOllama
+    llm1 = make_llm()
+    llm2 = make_llm()
+    assert isinstance(llm1, ChatOllama)
+    assert llm1 is not llm2
 
 
 # ── _merge_results ─────────────────────────────────────────
@@ -109,3 +118,22 @@ def test_stream_answer_with_history():
     chat_history = [HumanMessage(content="Q1"), AIMessage(content="A1")]
     chunks = list(stream_answer(llm, "Q2", chat_history, docs))
     assert "".join(chunks) == "履歴あり回答"
+
+
+# ── invoke_answer ──────────────────────────────────────────
+
+def test_invoke_answer_returns_string():
+    """invoke_answer は回答全文を文字列で返す。"""
+    llm = FakeListLLM(responses=["invoke回答"])
+    docs = [Document(page_content="コンテキスト", metadata={"source": "test.md"})]
+    result = invoke_answer(llm, "質問", [], docs)
+    assert result == "invoke回答"
+
+
+def test_invoke_answer_with_history():
+    """履歴ありでも invoke_answer は文字列を返す。"""
+    llm = FakeListLLM(responses=["履歴付きinvoke回答"])
+    docs = [Document(page_content="ctx", metadata={"source": "n.md"})]
+    chat_history = [HumanMessage(content="Q1"), AIMessage(content="A1")]
+    result = invoke_answer(llm, "Q2", chat_history, docs)
+    assert result == "履歴付きinvoke回答"
