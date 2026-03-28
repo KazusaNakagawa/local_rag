@@ -10,7 +10,7 @@ from langchain_core.output_parsers import StrOutputParser
 from langchain_ollama import ChatOllama, OllamaEmbeddings
 
 sys.path.insert(0, os.path.dirname(__file__))
-from config import VECTORSTORE_PATH, PROJECT_ROOT, EMBED_MODEL, LLM_MODEL, TOP_K, FETCH_K
+from config import VECTORSTORE_PATH, PROJECT_ROOT, EMBED_MODEL, LLM_MODEL, TOP_K, FETCH_K, CHAT_HISTORY_TURNS
 from db import init_db, create_session, list_sessions, delete_session, update_session_title, get_messages, AppChatMessageHistory, build_export_content, export_filename
 from prompts import CONTEXTUALIZE_PROMPT, QA_PROMPT
 
@@ -174,7 +174,7 @@ for msg in messages:
 
 # 入力欄
 if question := st.chat_input("Obsidian ノートに質問する..."):
-    history = AppChatMessageHistory(st.session_state.session_id)
+    history = AppChatMessageHistory(st.session_state.session_id, max_turns=CHAT_HISTORY_TURNS)
     chat_history = history.messages  # 現在の履歴を取得（今回の質問は含まない）
     is_first_message = len(chat_history) == 0
 

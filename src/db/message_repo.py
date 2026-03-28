@@ -30,12 +30,15 @@ class AppChatMessageHistory(BaseChatMessageHistory):
     セッションごとに履歴の読み書きを行い、ストリーミング応答完了後に保存する。
     """
 
-    def __init__(self, session_id: str) -> None:
+    def __init__(self, session_id: str, max_turns: int | None = None) -> None:
         self.session_id = session_id
+        self.max_turns = max_turns  # None で全件、n で直近 n ターン分に制限
 
     @property
     def messages(self) -> list[BaseMessage]:
         rows = get_messages(self.session_id)
+        if self.max_turns is not None:
+            rows = rows[-(self.max_turns * 2):]
         result = []
         for row in rows:
             if row["role"] == "user":

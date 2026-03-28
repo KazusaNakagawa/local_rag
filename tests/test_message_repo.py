@@ -110,3 +110,58 @@ def test_app_chat_message_history_clear_is_noop(tmp_db):
     history = AppChatMessageHistory(session_id)
     history.clear()
     assert len(history.messages) == 1
+
+
+def test_app_chat_message_history_max_turns(tmp_db):
+    """max_turns を指定すると直近 N ターン分のみ返す。"""
+    session_id = create_session()
+    for i in range(1, 4):
+        save_message(session_id, "user", f"Q{i}")
+        save_message(session_id, "assistant", f"A{i}")
+
+    history = AppChatMessageHistory(session_id, max_turns=2)
+    msgs = history.messages
+    assert len(msgs) == 4
+    assert msgs[0].content == "Q2"
+    assert msgs[-1].content == "A3"
+
+
+def test_chain_integration_followup(tmp_db):
+    """AppChatMessageHistory を組み込んだチェーンでフォローアップ質問が履歴を参照する。"""
+    import sys, os
+    sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
+
+    from langchain_core.language_models.fake import FakeListLLM
+    from langchain_core.output_parsers import StrOutputParser
+    from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
+
+    session_id = create_session()
+    history = AppChatMessageHistory(session_id)
+
+    qa_prompt = ChatPromptTemplate.from_messages([
+        ("system", "コンテキスト: {context}"),
+        MessagesPlaceholder("chat_history"),
+        ("human", "{input}"),
+    ])
+
+    def run_turn(question: str, context: str = "テストコンテキスト") -> str:
+        llm = FakeListLLM(responses=["スタブ回答"])
+        chain = qa_prompt | llm | StrOutputParser()
+        chat_history = history.messages
+        answer = chain.invoke({"input": question, "chat_history": chat_history, "context": context})
+        history.add_message(HumanMessage(content=question))
+        history.add_message(AIMessage(content=answer))
+        return answer
+
+    # 1ターン目
+    answer1 = run_turn("最初の質問")
+    assert answer1 == "スタブ回答"
+    assert len(history.messages) == 2
+
+    # 2ターン目：履歴に1ターン目が含まれる
+    answer2 = run_turn("フォローアップ質問")
+    assert answer2 == "スタブ回答"
+    msgs = history.messages
+    assert len(msgs) == 4
+    assert msgs[0].content == "最初の質問"
+    assert msgs[2].content == "フォローアップ質問"
