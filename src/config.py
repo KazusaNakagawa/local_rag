@@ -21,3 +21,6 @@ MAX_CHUNK_CHARS = 1500  # コンテキスト長超過防止用の安全上限
 # 検索設定
 TOP_K = 6              # より多くの候補を拾う
 FETCH_K = 20           # MMR の候補プール数（多いほど多様性UP）
+
+# DB設定
+DB_PATH = os.path.join(PROJECT_ROOT, "data", "chat.db")
