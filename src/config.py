@@ -14,7 +14,7 @@ EMBED_MODEL = "nomic-embed-text"
 LLM_MODEL = "qwen2.5:7b"  # 14b に変えてもOK
 
 # チャンク設定
-CHUNK_SIZE = 300       # 細かくして一致しやすくする
+CHUNK_SIZE = 500       # コンテキスト保持のため適度なサイズに調整
 CHUNK_OVERLAP = 50
 MAX_CHUNK_CHARS = 1500  # コンテキスト長超過防止用の安全上限
 
