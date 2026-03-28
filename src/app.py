@@ -2,7 +2,6 @@ import logging
 import os
 import sys
 import threading
-from datetime import datetime
 
 import streamlit as st
 from langchain_core.messages import HumanMessage, AIMessage
@@ -14,39 +13,14 @@ from db import (
     get_messages, AppChatMessageHistory, save_message,
     build_export_content, export_filename,
 )
+from log_config import setup_logging
 import rag
 
 DOCS_CACHE_PATH = os.path.join(PROJECT_ROOT, "data", "docs_cache.pkl")
 LOG_DIR = os.path.join(PROJECT_ROOT, "logs")
 
+setup_logging(LOG_DIR)
 logger = logging.getLogger(__name__)
-
-
-@st.cache_resource
-def _setup_logging() -> None:
-    """ロギングをサーバー起動時に1回だけ設定する。
-
-    logs/<YYYYMMDD>-app.log に追記しつつ、コンソールにも同時出力する。
-    @st.cache_resource により Streamlit のリランをまたいで重複追加されない。
-    """
-    os.makedirs(LOG_DIR, exist_ok=True)
-    log_file = os.path.join(LOG_DIR, datetime.now().strftime("%Y%m%d") + "-app.log")
-
-    fmt = logging.Formatter("%(asctime)s [%(levelname)s] %(name)s: %(message)s")
-
-    file_handler = logging.FileHandler(log_file, mode="a", encoding="utf-8")
-    file_handler.setFormatter(fmt)
-
-    stream_handler = logging.StreamHandler()
-    stream_handler.setFormatter(fmt)
-
-    root = logging.getLogger()
-    root.setLevel(logging.INFO)
-    root.addHandler(file_handler)
-    root.addHandler(stream_handler)
-
-
-_setup_logging()
 
 # DB 初期化
 init_db()
