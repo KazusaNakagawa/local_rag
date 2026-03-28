@@ -109,8 +109,16 @@ def load_resources(
         bm25_docs = bm25_retriever.invoke(question)
         return _merge_results(bm25_docs, faiss_docs, TOP_K)
 
-    llm = ChatOllama(model=LLM_MODEL, temperature=0.1)
-    return llm, hybrid_retrieve
+    return hybrid_retrieve
+
+
+def make_llm() -> ChatOllama:
+    """呼び出しごとに新しい ChatOllama インスタンスを返す。
+
+    ChatOllama は同一インスタンスを複数スレッドで共有すると安全でないため、
+    バックグラウンドスレッドから呼び出す際は必ずこの関数で取得する。
+    """
+    return ChatOllama(model=LLM_MODEL, temperature=0.1)
 
 
 def format_docs(docs: list[Document]) -> str:

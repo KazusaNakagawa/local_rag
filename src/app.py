@@ -44,7 +44,11 @@ def _get_shared_state() -> dict:
 
 @st.cache_resource
 def _load_cached_resources():
-    """RAG リソースをロードしてキャッシュする。パス検証は load_resources() 内で実施。"""
+    """ベクトルストアと BM25 リトリーバーをロードしてキャッシュする。
+
+    LLM は ChatOllama のスレッドセーフ性が保証されないため、ここではキャッシュせず
+    スレッドごとに rag.make_llm() で新規生成する。
+    """
     return rag.load_resources(VECTORSTORE_PATH, DOCS_CACHE_PATH, allow_deserialization=True)
 
 
@@ -56,8 +60,8 @@ if not os.path.exists(VECTORSTORE_PATH):
 if not os.path.exists(DOCS_CACHE_PATH):
     st.warning("BM25用のキャッシュがありません。`python ingest.py` を再実行してください。")
 
-llm, hybrid_retrieve = _load_cached_resources()
-if llm is None:
+hybrid_retrieve = _load_cached_resources()
+if hybrid_retrieve is None:
     st.error("リソースのロードに失敗しました。`python ingest.py` を実行してください。")
     st.stop()
 
@@ -82,6 +86,9 @@ def _run_chain(session_id: str, question: str, chat_history: list) -> None:
     try:
         logger.info("[%s] chain start — question: %.60s", sid, question)
 
+        # スレッドごとに新しい LLM インスタンスを生成（ChatOllama のスレッドセーフ性確保）
+        llm = rag.make_llm()
+
         _set_status("質問を解析中...")
         logger.info("[%s] contextualize_query start", sid)
         search_query = rag.contextualize_query(llm, question, chat_history)
@@ -102,6 +109,10 @@ def _run_chain(session_id: str, question: str, chat_history: list) -> None:
 
     except Exception as e:
         logger.exception("[%s] chain failed: %s", sid, e)
+        try:
+            save_message(session_id, "assistant", "⚠️ エラーが発生しました。もう一度お試しください。")
+        except Exception:
+            logger.exception("[%s] failed to save error message", sid)
     finally:
         with shared["lock"]:
             shared["pending"].discard(session_id)
@@ -186,19 +197,24 @@ def _chat_area() -> None:
 
 _chat_area()
 
-# 入力欄
-if question := st.chat_input("Obsidian ノートに質問する..."):
+# 入力欄：処理中はインプットを無効化して多重送信を防ぐ
+shared = _get_shared_state()
+with shared["lock"]:
+    _current_pending = st.session_state.session_id in shared["pending"]
+
+if _current_pending:
+    st.chat_input("処理中です...", disabled=True)
+elif question := st.chat_input("Obsidian ノートに質問する..."):
     session_id = st.session_state.session_id
-    shared = _get_shared_state()
 
     logger.info("[%s] user submitted: %.60s", session_id[:8], question)
 
-    # 現在の会話履歴を取得（新しいユーザー質問は含まない）
+    # 現在の会話履歴を取得 (新しいユーザー質問は含まない)
     history = AppChatMessageHistory(session_id, max_turns=CHAT_HISTORY_TURNS)
     chat_history = history.messages
     is_first_message = len(chat_history) == 0
 
-    # ユーザーメッセージを即時 DB に保存（セッション切替が発生しても消えない）
+    # ユーザーメッセージを即時 DB に保存 (セッション切替が発生しても消えない)
     save_message(session_id, "user", question)
     logger.info("[%s] user message saved to DB", session_id[:8])
 

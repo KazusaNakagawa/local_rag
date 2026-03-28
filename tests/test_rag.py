@@ -8,7 +8,7 @@ from langchain_core.documents import Document
 from langchain_core.language_models.fake import FakeListLLM
 from langchain_core.messages import HumanMessage, AIMessage
 
-from rag import format_docs, contextualize_query, stream_answer, invoke_answer, _merge_results, load_resources
+from rag import format_docs, contextualize_query, stream_answer, invoke_answer, _merge_results, load_resources, make_llm
 
 
 # ── load_resources ────────────────────────────────────────
@@ -17,6 +17,15 @@ def test_load_resources_requires_allow_deserialization():
     """allow_deserialization=False (デフォルト) では ValueError を送出する。"""
     with pytest.raises(ValueError, match="allow_deserialization"):
         load_resources("/any/path")
+
+
+def test_make_llm_returns_new_instance():
+    """make_llm() は呼び出しごとに別インスタンスを返す。"""
+    from langchain_ollama import ChatOllama
+    llm1 = make_llm()
+    llm2 = make_llm()
+    assert isinstance(llm1, ChatOllama)
+    assert llm1 is not llm2
 
 
 # ── _merge_results ─────────────────────────────────────────
