@@ -88,7 +88,7 @@ python ingest.py
 
 成功すると以下のように表示される：
 
-```
+```bash
 📂 Vault パス: /Users/.../Documents/Obsidian Vault
 ✅ XX ファイルを読み込みました
 ✅ XX チャンクに分割しました
