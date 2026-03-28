@@ -12,7 +12,7 @@ from langchain_ollama import ChatOllama, OllamaEmbeddings
 
 sys.path.insert(0, os.path.dirname(__file__))
 from config import VECTORSTORE_PATH, PROJECT_ROOT, EMBED_MODEL, LLM_MODEL, TOP_K, FETCH_K
-from db import init_db, create_session, list_sessions, delete_session, save_message, get_messages
+from db import init_db, create_session, list_sessions, delete_session, save_message, get_messages, build_export_content, export_filename
 from db.session_repo import update_session_title
 
 DOCS_CACHE_PATH = os.path.join(PROJECT_ROOT, "data", "docs_cache.pkl")
@@ -120,9 +120,23 @@ with st.sidebar:
         st.rerun()
 
     st.divider()
+
+    # 現在のセッションをエクスポート
+    current_sessions = list_sessions()
+    current_title = next((s["title"] for s in current_sessions if s["id"] == st.session_state.session_id), "chat")
+    export_content = build_export_content(st.session_state.session_id, current_title)
+    st.download_button(
+        label="📥 エクスポート",
+        data=export_content.encode("utf-8"),
+        file_name=export_filename(),
+        mime="text/markdown",
+        use_container_width=True,
+    )
+
+    st.divider()
     st.markdown("#### 履歴")
 
-    sessions = list_sessions()
+    sessions = current_sessions
     for s in sessions:
         col1, col2 = st.columns([5, 1])
         is_active = s["id"] == st.session_state.session_id
