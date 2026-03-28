@@ -196,10 +196,11 @@ def _chat_area() -> None:
         with st.chat_message("assistant"):
             st.markdown(f"⏳ {status_msg}")
 
-    # pending → 完了 の遷移を検知してページ全体をリランする
-    # これにより st.chat_input が再評価されて入力欄が有効に戻る
-    was_pending = st.session_state.get("_chat_was_pending", False)
-    st.session_state._chat_was_pending = is_pending
+    # Detect pending→complete transition and trigger a full-page rerun.
+    # This re-evaluates st.chat_input (outside the fragment) so the input re-enables.
+    was_pending = st.session_state.pop("_chat_was_pending", False)
+    if is_pending:
+        st.session_state._chat_was_pending = True
     if was_pending and not is_pending:
         logger.info("[chat_area] processing complete — triggering full rerun to re-enable input")
         st.rerun()
