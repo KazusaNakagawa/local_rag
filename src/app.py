@@ -35,6 +35,7 @@ with st.sidebar:
 
 @st.cache_resource
 def load_chain():
+    """FAISS と BM25 のハイブリッドリトリーバーと LLM チェーンをロードして返す。"""
     if not os.path.exists(VECTORSTORE_PATH):
         return None, None
 

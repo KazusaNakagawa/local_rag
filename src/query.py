@@ -17,9 +17,11 @@ PROMPT_TEMPLATE = """以下のコンテキストを参考に、質問に日本�
 回答:"""
 
 def format_docs(docs):
+    """ドキュメントのリストを改行区切りの文字列に整形する。"""
     return "\n\n".join(doc.page_content for doc in docs)
 
 def query(question: str):
+    """ベクトルストアを使って質問に回答する。"""
     if not os.path.exists(VECTORSTORE_PATH):
         print("❌ ベクトルストアが見つかりません。先に ingest.py を実行してください。")
         return

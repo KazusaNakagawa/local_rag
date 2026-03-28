@@ -6,12 +6,13 @@ import os
 import pickle
 from config import (
     OBSIDIAN_VAULT_PATH, VECTORSTORE_PATH, PROJECT_ROOT,
-    EMBED_MODEL, CHUNK_SIZE, CHUNK_OVERLAP
+    EMBED_MODEL, CHUNK_SIZE, CHUNK_OVERLAP, MAX_CHUNK_CHARS
 )
 
 DOCS_CACHE_PATH = os.path.join(PROJECT_ROOT, "data", "docs_cache.pkl")
 
 def ingest():
+    """Obsidian Vault を読み込み、チャンク分割してベクトルストアに保存する。"""
     print(f"📂 Vault パス: {OBSIDIAN_VAULT_PATH}")
 
     if not os.path.exists(OBSIDIAN_VAULT_PATH):
@@ -37,10 +38,10 @@ def ingest():
     print(f"✅ {len(chunks)} チャンクに分割しました")
 
     # モデルのコンテキスト長超過を防ぐため長すぎるチャンクを截断
-    MAX_CHUNK_CHARS = 1500
     truncated = 0
     for chunk in chunks:
         if len(chunk.page_content) > MAX_CHUNK_CHARS:
+            print(f"  截断: {chunk.metadata.get('source', 'unknown')} ({len(chunk.page_content)} -> {MAX_CHUNK_CHARS})")
             chunk.page_content = chunk.page_content[:MAX_CHUNK_CHARS]
             truncated += 1
     if truncated:
