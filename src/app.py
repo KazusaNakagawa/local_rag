@@ -1,18 +1,13 @@
 import os
-import pickle
 import sys
 
 import streamlit as st
-from langchain_community.retrievers import BM25Retriever
-from langchain_community.vectorstores import FAISS
 from langchain_core.messages import HumanMessage, AIMessage
-from langchain_core.output_parsers import StrOutputParser
-from langchain_ollama import ChatOllama, OllamaEmbeddings
 
 sys.path.insert(0, os.path.dirname(__file__))
-from config import VECTORSTORE_PATH, PROJECT_ROOT, EMBED_MODEL, LLM_MODEL, TOP_K, FETCH_K, CHAT_HISTORY_TURNS
+from config import VECTORSTORE_PATH, PROJECT_ROOT, EMBED_MODEL, LLM_MODEL, CHAT_HISTORY_TURNS
 from db import init_db, create_session, list_sessions, delete_session, update_session_title, get_messages, AppChatMessageHistory, build_export_content, export_filename
-from prompts import CONTEXTUALIZE_PROMPT, QA_PROMPT
+import rag
 
 DOCS_CACHE_PATH = os.path.join(PROJECT_ROOT, "data", "docs_cache.pkl")
 DATA_DIR = os.path.join(PROJECT_ROOT, "data")
@@ -34,15 +29,6 @@ def _assert_safe_path(path: str) -> None:
         raise ValueError(f"ワールドライタブルなファイルは読み込めません: {path}")
 
 
-def format_docs(docs) -> str:
-    """ドキュメントをソース名付きの構造化テキストに整形する。"""
-    chunks = []
-    for i, doc in enumerate(docs, 1):
-        source = os.path.basename(doc.metadata.get("source", "unknown"))
-        chunks.append(f"=== Source {i}: {source} ===\n{doc.page_content}\n---")
-    return "\n\n".join(chunks)
-
-
 # DB 初期化
 init_db()
 
@@ -50,57 +36,12 @@ st.set_page_config(page_title="Obsidian RAG", page_icon="📓", layout="wide")
 
 
 @st.cache_resource
-def load_resources():
-    """FAISS・BM25・LLM をロードしてキャッシュする。"""
-    if not os.path.exists(VECTORSTORE_PATH):
-        return None, None
-
+def _load_cached_resources():
+    """パス検証後に RAG リソースをロードしてキャッシュする。"""
     _assert_safe_path(VECTORSTORE_PATH)
-    embeddings = OllamaEmbeddings(model=EMBED_MODEL)
-    vectorstore = FAISS.load_local(
-        VECTORSTORE_PATH, embeddings,
-        allow_dangerous_deserialization=True,
-    )
-    faiss_retriever = vectorstore.as_retriever(
-        search_type="mmr",
-        search_kwargs={"k": TOP_K, "fetch_k": FETCH_K},
-    )
-
-    bm25_retriever = None
     if os.path.exists(DOCS_CACHE_PATH):
-        # docs_cache.pkl は ingest.py がローカルの Obsidian Vault から生成する
-        # 信頼済みローカルファイルのため pickle デシリアライズは安全
         _assert_safe_path(DOCS_CACHE_PATH)
-        with open(DOCS_CACHE_PATH, "rb") as f:
-            all_docs = pickle.load(f)
-
-        def japanese_tokenizer(text: str):
-            """日本語テキストを文字・バイグラム単位でトークナイズする。"""
-            chars = list(text)
-            bigrams = ["".join(chars[i:i + 2]) for i in range(len(chars) - 1)]
-            return chars + bigrams
-
-        bm25_retriever = BM25Retriever.from_documents(
-            all_docs, preprocess_func=japanese_tokenizer
-        )
-        bm25_retriever.k = TOP_K
-
-    def hybrid_retrieve(question: str):
-        """BM25 と FAISS の結果をマージして重複除去したドキュメントリストを返す。"""
-        faiss_docs = faiss_retriever.invoke(question)
-        if bm25_retriever is None:
-            return faiss_docs
-        bm25_docs = bm25_retriever.invoke(question)
-        seen, combined = set(), []
-        for doc in bm25_docs + faiss_docs:
-            key = doc.page_content[:80]
-            if key not in seen:
-                seen.add(key)
-                combined.append(doc)
-        return combined[:TOP_K]
-
-    llm = ChatOllama(model=LLM_MODEL, temperature=0.1)
-    return llm, hybrid_retrieve
+    return rag.load_resources(VECTORSTORE_PATH, DOCS_CACHE_PATH)
 
 
 # ── ベクトルストア存在チェック ──────────────────────────────
@@ -111,7 +52,7 @@ if not os.path.exists(VECTORSTORE_PATH):
 if not os.path.exists(DOCS_CACHE_PATH):
     st.warning("BM25用のキャッシュがありません。`python ingest.py` を再実行してください。")
 
-llm, hybrid_retrieve = load_resources()
+llm, hybrid_retrieve = _load_cached_resources()
 if llm is None:
     st.error("リソースのロードに失敗しました。`python ingest.py` を実行してください。")
     st.stop()
@@ -175,7 +116,7 @@ for msg in messages:
 # 入力欄
 if question := st.chat_input("Obsidian ノートに質問する..."):
     history = AppChatMessageHistory(st.session_state.session_id, max_turns=CHAT_HISTORY_TURNS)
-    chat_history = history.messages  # 現在の履歴を取得（今回の質問は含まない）
+    chat_history = history.messages
     is_first_message = len(chat_history) == 0
 
     with st.chat_message("user"):
@@ -185,33 +126,22 @@ if question := st.chat_input("Obsidian ノートに質問する..."):
         update_session_title(st.session_state.session_id, question[:40])
 
     with st.chat_message("assistant"):
-        # Step 1: 会話履歴がある場合はフォローアップ質問を単独の質問に言い換え
         if chat_history:
             with st.spinner("質問を解析中..."):
-                search_query = (CONTEXTUALIZE_PROMPT | llm | StrOutputParser()).invoke(
-                    {"input": question, "chat_history": chat_history}
-                )
+                search_query = rag.contextualize_query(llm, question, chat_history)
         else:
             search_query = question
 
-        # Step 2: 言い換えた質問でハイブリッド検索
         with st.spinner("ノートを検索中..."):
             source_docs = hybrid_retrieve(search_query)
 
-        # Step 3: 回答をストリーミング出力
         answer = ""
         try:
-            answer = st.write_stream(
-                (QA_PROMPT | llm | StrOutputParser()).stream(
-                    {"input": question, "chat_history": chat_history, "context": format_docs(source_docs)}
-                )
-            )
+            answer = st.write_stream(rag.stream_answer(llm, question, chat_history, source_docs))
         except Exception:
             st.error("回答の生成に失敗しました。Ollama が起動しているか確認してください。")
             raise
         finally:
-            # ストリーミング成否に関わらずユーザーメッセージを保存
-            # 回答が得られた場合はアシスタントメッセージも保存
             history.add_message(HumanMessage(content=question))
             if answer:
                 history.add_message(AIMessage(content=answer))
