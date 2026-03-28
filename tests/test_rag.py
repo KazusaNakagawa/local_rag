@@ -8,7 +8,48 @@ from langchain_core.documents import Document
 from langchain_core.language_models.fake import FakeListLLM
 from langchain_core.messages import HumanMessage, AIMessage
 
-from rag import format_docs, contextualize_query, stream_answer
+from rag import format_docs, contextualize_query, stream_answer, _merge_results, load_resources
+
+
+# ── load_resources ────────────────────────────────────────
+
+def test_load_resources_requires_allow_deserialization():
+    """allow_deserialization=False（デフォルト）では ValueError を送出する。"""
+    with pytest.raises(ValueError, match="allow_deserialization"):
+        load_resources("/any/path")
+
+
+# ── _merge_results ─────────────────────────────────────────
+
+def test_merge_results_deduplicates_same_source_and_content():
+    """同じソースと本文を持つドキュメントは重複除去される。"""
+    doc = Document(page_content="text", metadata={"source": "a.md"})
+    duplicate = Document(page_content="text", metadata={"source": "a.md"})
+    result = _merge_results([doc], [duplicate], top_k=10)
+    assert len(result) == 1
+
+
+def test_merge_results_keeps_same_content_different_source():
+    """同じ本文でもソースが異なれば別ドキュメントとして保持する。"""
+    doc1 = Document(page_content="text", metadata={"source": "a.md"})
+    doc2 = Document(page_content="text", metadata={"source": "b.md"})
+    result = _merge_results([doc1], [doc2], top_k=10)
+    assert len(result) == 2
+
+
+def test_merge_results_bm25_first():
+    """BM25 の結果が先頭に来る。"""
+    bm25_doc = Document(page_content="bm25", metadata={"source": "a.md"})
+    faiss_doc = Document(page_content="faiss", metadata={"source": "b.md"})
+    result = _merge_results([bm25_doc], [faiss_doc], top_k=10)
+    assert result[0].page_content == "bm25"
+
+
+def test_merge_results_respects_top_k():
+    """top_k で上限を超えないことを確認。"""
+    docs = [Document(page_content=f"doc{i}", metadata={"source": f"{i}.md"}) for i in range(6)]
+    result = _merge_results(docs[:3], docs[3:], top_k=4)
+    assert len(result) == 4
 
 
 # ── format_docs ────────────────────────────────────────────

@@ -41,7 +41,7 @@ def _load_cached_resources():
     _assert_safe_path(VECTORSTORE_PATH)
     if os.path.exists(DOCS_CACHE_PATH):
         _assert_safe_path(DOCS_CACHE_PATH)
-    return rag.load_resources(VECTORSTORE_PATH, DOCS_CACHE_PATH)
+    return rag.load_resources(VECTORSTORE_PATH, DOCS_CACHE_PATH, allow_deserialization=True)
 
 
 # ── ベクトルストア存在チェック ──────────────────────────────

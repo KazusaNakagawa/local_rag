@@ -21,16 +21,43 @@ def _japanese_tokenizer(text: str) -> list[str]:
     return chars + bigrams
 
 
-def load_resources(vectorstore_path: str, docs_cache_path: str | None = None):
+def _merge_results(bm25_docs: list, faiss_docs: list, top_k: int) -> list:
+    """BM25 と FAISS の結果をマージして重複除去したドキュメントリストを返す。
+
+    dedup キーにソースパスと全文を使うことで、同一内容の異なるファイル間の
+    誤った重複排除を防ぐ。BM25 の結果を優先して先頭に配置する。
+    """
+    seen, combined = set(), []
+    for doc in bm25_docs + faiss_docs:
+        key = doc.metadata.get("source", "") + "|" + doc.page_content
+        if key not in seen:
+            seen.add(key)
+            combined.append(doc)
+    return combined[:top_k]
+
+
+def load_resources(
+    vectorstore_path: str,
+    docs_cache_path: str | None = None,
+    allow_deserialization: bool = False,
+):
     """FAISS・BM25・LLM をロードして (llm, hybrid_retrieve_fn) を返す。
 
     Args:
         vectorstore_path: FAISS ベクトルストアのパス。
         docs_cache_path: BM25 用 pickle キャッシュのパス。None または存在しない場合は BM25 なし。
+        allow_deserialization: FAISS および pickle の逆シリアライズを許可する場合は True。
+            呼び出し元がパスの安全性を確認済みであることを明示するフラグ。
 
     Returns:
         (llm, hybrid_retrieve_fn) のタプル。
     """
+    if not allow_deserialization:
+        raise ValueError(
+            "allow_deserialization=True を明示的に指定してください。"
+            "パスが信頼済みのローカルファイルであることを確認してから呼び出してください。"
+        )
+
     embeddings = OllamaEmbeddings(model=EMBED_MODEL)
     vectorstore = FAISS.load_local(
         vectorstore_path, embeddings,
@@ -43,8 +70,6 @@ def load_resources(vectorstore_path: str, docs_cache_path: str | None = None):
 
     bm25_retriever = None
     if docs_cache_path and os.path.exists(docs_cache_path):
-        # docs_cache.pkl は ingest.py がローカルの Obsidian Vault から生成する
-        # 信頼済みローカルファイルのため pickle デシリアライズは安全
         with open(docs_cache_path, "rb") as f:
             all_docs = pickle.load(f)
         bm25_retriever = BM25Retriever.from_documents(
@@ -58,13 +83,7 @@ def load_resources(vectorstore_path: str, docs_cache_path: str | None = None):
         if bm25_retriever is None:
             return faiss_docs
         bm25_docs = bm25_retriever.invoke(question)
-        seen, combined = set(), []
-        for doc in bm25_docs + faiss_docs:
-            key = doc.page_content[:80]
-            if key not in seen:
-                seen.add(key)
-                combined.append(doc)
-        return combined[:TOP_K]
+        return _merge_results(bm25_docs, faiss_docs, TOP_K)
 
     llm = ChatOllama(model=LLM_MODEL, temperature=0.1)
     return llm, hybrid_retrieve

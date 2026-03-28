@@ -1,8 +1,10 @@
 import sys
 import os
 
-from config import VECTORSTORE_PATH
+from config import VECTORSTORE_PATH, PROJECT_ROOT
 import rag
+
+DOCS_CACHE_PATH = os.path.join(PROJECT_ROOT, "data", "docs_cache.pkl")
 
 
 def query(question: str) -> None:
@@ -13,7 +15,9 @@ def query(question: str) -> None:
 
     print(f"🔍 質問: {question}\n")
 
-    llm, retrieve = rag.load_resources(VECTORSTORE_PATH)
+    llm, retrieve = rag.load_resources(
+        VECTORSTORE_PATH, DOCS_CACHE_PATH, allow_deserialization=True
+    )
     docs = retrieve(question)
     print("💬 回答:")
     for chunk in rag.stream_answer(llm, question, [], docs):
