@@ -36,6 +36,16 @@ def ingest():
     chunks = splitter.split_documents(docs)
     print(f"✅ {len(chunks)} チャンクに分割しました")
 
+    # モデルのコンテキスト長超過を防ぐため長すぎるチャンクを截断
+    MAX_CHUNK_CHARS = 1500
+    truncated = 0
+    for chunk in chunks:
+        if len(chunk.page_content) > MAX_CHUNK_CHARS:
+            chunk.page_content = chunk.page_content[:MAX_CHUNK_CHARS]
+            truncated += 1
+    if truncated:
+        print(f"⚠️  {truncated} チャンクを {MAX_CHUNK_CHARS} 文字に截断しました")
+
     # 3. ベクトル化 & 保存
     print(f"⏳ Embedding 中... (モデル: {EMBED_MODEL})")
     embeddings = OllamaEmbeddings(model=EMBED_MODEL)
