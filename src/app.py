@@ -12,8 +12,7 @@ from langchain_ollama import ChatOllama, OllamaEmbeddings
 
 sys.path.insert(0, os.path.dirname(__file__))
 from config import VECTORSTORE_PATH, PROJECT_ROOT, EMBED_MODEL, LLM_MODEL, TOP_K, FETCH_K
-from db import init_db, create_session, list_sessions, delete_session, save_message, get_messages, build_export_content, export_filename
-from db.session_repo import update_session_title
+from db import init_db, create_session, list_sessions, delete_session, update_session_title, save_message, get_messages, build_export_content, export_filename
 
 DOCS_CACHE_PATH = os.path.join(PROJECT_ROOT, "data", "docs_cache.pkl")
 
@@ -50,6 +49,8 @@ def load_chain():
 
     bm25_retriever = None
     if os.path.exists(DOCS_CACHE_PATH):
+        # docs_cache.pkl は ingest.py がローカルの Obsidian Vault から生成する
+        # 信頼済みローカルファイルのため pickle デシリアライズは安全
         with open(DOCS_CACHE_PATH, "rb") as f:
             all_docs = pickle.load(f)
 
@@ -107,8 +108,10 @@ if not os.path.exists(DOCS_CACHE_PATH):
 chain, retriever = load_chain()
 
 # ── セッション初期化 ────────────────────────────────────────
+# 再起動後は直近セッションを復元し、存在しない場合のみ新規作成
 if "session_id" not in st.session_state:
-    st.session_state.session_id = create_session()
+    recent = list_sessions()
+    st.session_state.session_id = recent[0]["id"] if recent else create_session()
 
 # ── サイドバー：セッション一覧 ──────────────────────────────
 with st.sidebar:
@@ -147,7 +150,8 @@ with st.sidebar:
         if col2.button("🗑", key=f"del_{s['id']}"):
             delete_session(s["id"])
             if is_active:
-                st.session_state.session_id = create_session()
+                remaining = [x for x in sessions if x["id"] != s["id"]]
+                st.session_state.session_id = remaining[0]["id"] if remaining else create_session()
             st.rerun()
 
 # ── メインエリア ────────────────────────────────────────────

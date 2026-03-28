@@ -4,12 +4,12 @@ from db.message_repo import save_message
 from db.export import build_export_content, export_filename
 
 
-def test_export_filename_format(tmp_db):
+def test_export_filename_format():
     name = export_filename()
     assert re.match(r"^\d{12}_claude_chat\.md$", name)
 
 
-def test_export_filename_custom_prefix(tmp_db):
+def test_export_filename_custom_prefix():
     name = export_filename(prefix="my_export")
     assert name.endswith("_my_export.md")
 

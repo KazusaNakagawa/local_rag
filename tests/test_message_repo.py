@@ -1,3 +1,4 @@
+import sqlite3
 import pytest
 from db.session_repo import create_session, delete_session
 from db.message_repo import save_message, get_messages
@@ -51,5 +52,5 @@ def test_delete_session_cascades_messages(tmp_db):
 
 def test_invalid_role_raises(tmp_db):
     session_id = create_session()
-    with pytest.raises(Exception):
+    with pytest.raises(sqlite3.IntegrityError):
         save_message(session_id, "invalid_role", "テスト")
