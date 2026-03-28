@@ -112,6 +112,9 @@ if not os.path.exists(DOCS_CACHE_PATH):
     st.warning("BM25用のキャッシュがありません。`python ingest.py` を再実行してください。")
 
 llm, hybrid_retrieve = load_resources()
+if llm is None:
+    st.error("リソースのロードに失敗しました。`python ingest.py` を実行してください。")
+    st.stop()
 
 # ── セッション初期化 ────────────────────────────────────────
 # 再起動後は直近セッションを復元し、存在しない場合のみ新規作成
@@ -196,11 +199,22 @@ if question := st.chat_input("Obsidian ノートに質問する..."):
             source_docs = hybrid_retrieve(search_query)
 
         # Step 3: 回答をストリーミング出力
-        answer = st.write_stream(
-            (QA_PROMPT | llm | StrOutputParser()).stream(
-                {"input": question, "chat_history": chat_history, "context": format_docs(source_docs)}
+        answer = ""
+        try:
+            answer = st.write_stream(
+                (QA_PROMPT | llm | StrOutputParser()).stream(
+                    {"input": question, "chat_history": chat_history, "context": format_docs(source_docs)}
+                )
             )
-        )
+        except Exception:
+            st.error("回答の生成に失敗しました。Ollama が起動しているか確認してください。")
+            raise
+        finally:
+            # ストリーミング成否に関わらずユーザーメッセージを保存
+            # 回答が得られた場合はアシスタントメッセージも保存
+            history.add_message(HumanMessage(content=question))
+            if answer:
+                history.add_message(AIMessage(content=answer))
 
         with st.expander("📎 参照したノート"):
             for i, doc in enumerate(source_docs, 1):
@@ -209,7 +223,3 @@ if question := st.chat_input("Obsidian ノートに質問する..."):
                 st.markdown(f"**{i}. {filename}**")
                 st.text(doc.page_content[:300] + "..." if len(doc.page_content) > 300 else doc.page_content)
                 st.divider()
-
-    # 回答完了後に DB へ保存
-    history.add_message(HumanMessage(content=question))
-    history.add_message(AIMessage(content=answer))

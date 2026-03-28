@@ -101,3 +101,12 @@ def test_app_chat_message_history_reflects_db(tmp_db):
 
     save_message(session_id, "user", "追加")
     assert len(history.messages) == 1
+
+
+def test_app_chat_message_history_clear_is_noop(tmp_db):
+    """clear() は no-op — メッセージ削除は delete_session() で行う。"""
+    session_id = create_session()
+    save_message(session_id, "user", "テスト")
+    history = AppChatMessageHistory(session_id)
+    history.clear()
+    assert len(history.messages) == 1

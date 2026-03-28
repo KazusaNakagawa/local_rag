@@ -25,9 +25,9 @@ def get_messages(session_id: str) -> list[dict]:
 
 
 class AppChatMessageHistory(BaseChatMessageHistory):
-    """既存の messages テーブルを LangChain の履歴インターフェースで包むクラス。
+    """既存の messages テーブルを LangChain の BaseChatMessageHistory インターフェースで包むクラス。
 
-    RunnableWithMessageHistory に渡すことで、履歴の読み書きを自動管理する。
+    セッションごとに履歴の読み書きを行い、ストリーミング応答完了後に保存する。
     """
 
     def __init__(self, session_id: str) -> None:
