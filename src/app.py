@@ -3,11 +3,9 @@ import pickle
 import sys
 
 import streamlit as st
-from langchain.chains import create_history_aware_retriever, create_retrieval_chain
-from langchain.chains.combine_documents import create_stuff_documents_chain
 from langchain_community.retrievers import BM25Retriever
 from langchain_community.vectorstores import FAISS
-from langchain_core.prompts import PromptTemplate
+from langchain_core.output_parsers import StrOutputParser
 from langchain_core.runnables import RunnableLambda
 from langchain_core.runnables.history import RunnableWithMessageHistory
 from langchain_ollama import ChatOllama, OllamaEmbeddings
@@ -97,28 +95,40 @@ def load_chain():
         return docs
 
     llm = ChatOllama(model=LLM_MODEL, temperature=0.1)
+    contextualize_chain = CONTEXTUALIZE_PROMPT | llm | StrOutputParser()
 
-    # Step 1: フォローアップ質問を単独の質問に言い換えるリトリーバー
-    history_aware_retriever = create_history_aware_retriever(
-        llm, RunnableLambda(hybrid_retrieve), CONTEXTUALIZE_PROMPT
-    )
+    def format_docs(docs):
+        chunks = []
+        for i, doc in enumerate(docs, 1):
+            source = os.path.basename(doc.metadata.get("source", "unknown"))
+            chunks.append(f"=== Source {i}: {source} ===\n{doc.page_content}\n---")
+        return "\n\n".join(chunks)
 
-    # Step 2: 取得ドキュメントをソース名付きで整形する QA チェーン
-    doc_prompt = PromptTemplate.from_template(
-        "=== {source_name} ===\n{page_content}\n---"
-    )
-    qa_chain = create_stuff_documents_chain(
-        llm, QA_PROMPT,
-        document_prompt=doc_prompt,
-        document_separator="\n\n",
-    )
+    def rag_pipeline(inputs: dict) -> dict:
+        """2ステップ RAG: 質問の文脈補完 → ハイブリッド検索 → 回答生成。"""
+        question = inputs["input"]
+        chat_history = inputs.get("chat_history", [])
 
-    # Step 3: リトリーバー + QA を結合した RAG チェーン
-    rag_chain = create_retrieval_chain(history_aware_retriever, qa_chain)
+        # Step 1: 会話履歴がある場合はフォローアップ質問を単独の質問に言い換え
+        if chat_history:
+            search_query = contextualize_chain.invoke(
+                {"input": question, "chat_history": chat_history}
+            )
+        else:
+            search_query = question
 
-    # Step 4: 既存 DB をそのまま使う履歴管理でラップ
+        # Step 2: 言い換えた質問でハイブリッド検索
+        docs = hybrid_retrieve(search_query)
+
+        # Step 3: 取得ドキュメント + 会話履歴 + 質問 → 回答生成
+        answer = (QA_PROMPT | llm | StrOutputParser()).invoke(
+            {"input": question, "chat_history": chat_history, "context": format_docs(docs)}
+        )
+        return {"answer": answer, "context": docs}
+
+    # 既存 DB をそのまま使う履歴管理でラップ
     chain_with_history = RunnableWithMessageHistory(
-        rag_chain,
+        RunnableLambda(rag_pipeline),
         lambda session_id: AppChatMessageHistory(session_id),
         input_messages_key="input",
         history_messages_key="chat_history",

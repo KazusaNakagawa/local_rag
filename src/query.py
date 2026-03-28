@@ -3,12 +3,19 @@ import sys
 
 from langchain_ollama import OllamaEmbeddings, ChatOllama
 from langchain_community.vectorstores import FAISS
-from langchain.chains import create_history_aware_retriever, create_retrieval_chain
-from langchain.chains.combine_documents import create_stuff_documents_chain
-from langchain_core.prompts import PromptTemplate
+from langchain_core.output_parsers import StrOutputParser
 
 from config import VECTORSTORE_PATH, EMBED_MODEL, LLM_MODEL, TOP_K, FETCH_K
 from prompts import CONTEXTUALIZE_PROMPT, QA_PROMPT
+
+
+def format_docs(docs):
+    """ドキュメントをソース名付きの構造化テキストに整形する。"""
+    chunks = []
+    for i, doc in enumerate(docs, 1):
+        source = os.path.basename(doc.metadata.get("source", "unknown"))
+        chunks.append(f"=== Source {i}: {source} ===\n{doc.page_content}\n---")
+    return "\n\n".join(chunks)
 
 
 def query(question: str):
@@ -30,23 +37,12 @@ def query(question: str):
     )
     llm = ChatOllama(model=LLM_MODEL, temperature=0.1)
 
-    history_aware_retriever = create_history_aware_retriever(
-        llm, retriever, CONTEXTUALIZE_PROMPT
+    docs = retriever.invoke(question)
+    answer = (QA_PROMPT | llm | StrOutputParser()).invoke(
+        {"input": question, "chat_history": [], "context": format_docs(docs)}
     )
-
-    doc_prompt = PromptTemplate.from_template(
-        "=== {source} ===\n{page_content}\n---"
-    )
-    qa_chain = create_stuff_documents_chain(
-        llm, QA_PROMPT,
-        document_prompt=doc_prompt,
-        document_separator="\n\n",
-    )
-    rag_chain = create_retrieval_chain(history_aware_retriever, qa_chain)
-
-    result = rag_chain.invoke({"input": question, "chat_history": []})
     print("💬 回答:")
-    print(result["answer"])
+    print(answer)
 
 
 if __name__ == "__main__":
