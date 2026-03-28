@@ -1,3 +1,6 @@
+from langchain_core.chat_history import BaseChatMessageHistory
+from langchain_core.messages import BaseMessage, HumanMessage, AIMessage
+
 from .connection import get_connection
 
 
@@ -21,14 +24,29 @@ def get_messages(session_id: str) -> list[dict]:
     return [dict(row) for row in rows]
 
 
-def get_recent_messages(session_id: str, n_turns: int) -> list[dict]:
-    """直近 n_turns ターン分のメッセージを時系列順で返す。"""
-    with get_connection() as conn:
-        rows = conn.execute(
-            "SELECT role, content FROM ("
-            "  SELECT role, content, id FROM messages"
-            "  WHERE session_id = ? ORDER BY id DESC LIMIT ?"
-            ") ORDER BY id ASC",
-            (session_id, n_turns * 2),
-        ).fetchall()
-    return [dict(row) for row in rows]
+class AppChatMessageHistory(BaseChatMessageHistory):
+    """既存の messages テーブルを LangChain の履歴インターフェースで包むクラス。
+
+    RunnableWithMessageHistory に渡すことで、履歴の読み書きを自動管理する。
+    """
+
+    def __init__(self, session_id: str) -> None:
+        self.session_id = session_id
+
+    @property
+    def messages(self) -> list[BaseMessage]:
+        rows = get_messages(self.session_id)
+        result = []
+        for row in rows:
+            if row["role"] == "user":
+                result.append(HumanMessage(content=row["content"]))
+            else:
+                result.append(AIMessage(content=row["content"]))
+        return result
+
+    def add_message(self, message: BaseMessage) -> None:
+        role = "user" if isinstance(message, HumanMessage) else "assistant"
+        save_message(self.session_id, role, message.content)
+
+    def clear(self) -> None:
+        """セッション内メッセージの全削除は delete_session() で行うため未使用。"""

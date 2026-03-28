@@ -1,4 +1,19 @@
-PROMPT_TEMPLATE = """以下のコンテキストと会話履歴を参考に、質問に日本語で答えてください。
+from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
+
+CONTEXTUALIZE_PROMPT = ChatPromptTemplate.from_messages([
+    (
+        "system",
+        "会話履歴と最新の質問を踏まえ、履歴なしでも意味が通じる単独の質問に言い換えてください。"
+        "言い換えが不要な場合はそのまま返してください。",
+    ),
+    MessagesPlaceholder("chat_history"),
+    ("human", "{input}"),
+])
+
+QA_PROMPT = ChatPromptTemplate.from_messages([
+    (
+        "system",
+        """以下のコンテキストを参考に、質問に日本語で答えてください。
 
 ルール:
 - コンテキストに直接的な答えがある場合はそれを使って答えてください。
@@ -7,10 +22,8 @@ PROMPT_TEMPLATE = """以下のコンテキストと会話履歴を参考に、�
 - 会話履歴がある場合は、前の回答を踏まえて自然に答えてください。
 
 コンテキスト:
-{context}
-
-会話履歴:
-{chat_history}
-
-質問: {question}
-回答:"""
+{context}""",
+    ),
+    MessagesPlaceholder("chat_history"),
+    ("human", "{input}"),
+])

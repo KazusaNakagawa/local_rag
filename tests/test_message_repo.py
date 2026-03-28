@@ -1,7 +1,8 @@
 import sqlite3
 import pytest
+from langchain_core.messages import HumanMessage, AIMessage
 from db.session_repo import create_session, delete_session
-from db.message_repo import save_message, get_messages, get_recent_messages
+from db.message_repo import save_message, get_messages, AppChatMessageHistory
 
 
 def test_save_and_get_messages(tmp_db):
@@ -56,30 +57,47 @@ def test_invalid_role_raises(tmp_db):
         save_message(session_id, "invalid_role", "テスト")
 
 
-def test_get_recent_messages_returns_last_n_turns(tmp_db):
+# ── AppChatMessageHistory ──────────────────────────────────
+
+def test_app_chat_message_history_messages(tmp_db):
     session_id = create_session()
-    for i in range(1, 4):
-        save_message(session_id, "user", f"Q{i}")
-        save_message(session_id, "assistant", f"A{i}")
+    save_message(session_id, "user", "こんにちは")
+    save_message(session_id, "assistant", "はい")
 
-    recent = get_recent_messages(session_id, 2)
-    assert len(recent) == 4
-    assert recent[0]["content"] == "Q2"
-    assert recent[1]["content"] == "A2"
-    assert recent[2]["content"] == "Q3"
-    assert recent[3]["content"] == "A3"
+    history = AppChatMessageHistory(session_id)
+    msgs = history.messages
+    assert len(msgs) == 2
+    assert isinstance(msgs[0], HumanMessage)
+    assert msgs[0].content == "こんにちは"
+    assert isinstance(msgs[1], AIMessage)
+    assert msgs[1].content == "はい"
 
 
-def test_get_recent_messages_fewer_than_n_turns(tmp_db):
+def test_app_chat_message_history_add_message(tmp_db):
     session_id = create_session()
-    save_message(session_id, "user", "Q1")
-    save_message(session_id, "assistant", "A1")
+    history = AppChatMessageHistory(session_id)
+    history.add_message(HumanMessage(content="質問"))
+    history.add_message(AIMessage(content="回答"))
 
-    recent = get_recent_messages(session_id, 5)
-    assert len(recent) == 2
-    assert recent[0]["content"] == "Q1"
+    rows = get_messages(session_id)
+    assert len(rows) == 2
+    assert rows[0]["role"] == "user"
+    assert rows[0]["content"] == "質問"
+    assert rows[1]["role"] == "assistant"
+    assert rows[1]["content"] == "回答"
 
 
-def test_get_recent_messages_empty(tmp_db):
+def test_app_chat_message_history_empty(tmp_db):
     session_id = create_session()
-    assert get_recent_messages(session_id, 5) == []
+    history = AppChatMessageHistory(session_id)
+    assert history.messages == []
+
+
+def test_app_chat_message_history_reflects_db(tmp_db):
+    """履歴は DB の現在状態をそのまま反映する（キャッシュなし）。"""
+    session_id = create_session()
+    history = AppChatMessageHistory(session_id)
+    assert len(history.messages) == 0
+
+    save_message(session_id, "user", "追加")
+    assert len(history.messages) == 1

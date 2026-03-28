@@ -3,17 +3,19 @@ import pickle
 import sys
 
 import streamlit as st
+from langchain.chains import create_history_aware_retriever, create_retrieval_chain
+from langchain.chains.combine_documents import create_stuff_documents_chain
 from langchain_community.retrievers import BM25Retriever
 from langchain_community.vectorstores import FAISS
-from langchain_core.output_parsers import StrOutputParser
 from langchain_core.prompts import PromptTemplate
-from langchain_core.runnables import RunnablePassthrough
+from langchain_core.runnables import RunnableLambda
+from langchain_core.runnables.history import RunnableWithMessageHistory
 from langchain_ollama import ChatOllama, OllamaEmbeddings
 
 sys.path.insert(0, os.path.dirname(__file__))
-from config import VECTORSTORE_PATH, PROJECT_ROOT, EMBED_MODEL, LLM_MODEL, TOP_K, FETCH_K, CHAT_HISTORY_TURNS
-from db import init_db, create_session, list_sessions, delete_session, update_session_title, save_message, get_messages, get_recent_messages, build_export_content, export_filename
-from prompts import PROMPT_TEMPLATE
+from config import VECTORSTORE_PATH, PROJECT_ROOT, EMBED_MODEL, LLM_MODEL, TOP_K, FETCH_K
+from db import init_db, create_session, list_sessions, delete_session, update_session_title, save_message, get_messages, AppChatMessageHistory, build_export_content, export_filename
+from prompts import CONTEXTUALIZE_PROMPT, QA_PROMPT
 
 DOCS_CACHE_PATH = os.path.join(PROJECT_ROOT, "data", "docs_cache.pkl")
 DATA_DIR = os.path.join(PROJECT_ROOT, "data")
@@ -45,7 +47,7 @@ st.set_page_config(page_title="Obsidian RAG", page_icon="📓", layout="wide")
 def load_chain():
     """FAISS と BM25 のハイブリッドリトリーバーと LLM チェーンをロードして返す。"""
     if not os.path.exists(VECTORSTORE_PATH):
-        return None, None
+        return None
 
     _assert_safe_path(VECTORSTORE_PATH)
     embeddings = OllamaEmbeddings(model=EMBED_MODEL)
@@ -89,43 +91,40 @@ def load_chain():
             if key not in seen:
                 seen.add(key)
                 combined.append(doc)
-        return combined[:TOP_K]
-
-    def format_docs(docs):
-        """ドキュメントをソース名付きの構造化テキストに整形する。"""
-        chunks = []
-        for i, doc in enumerate(docs, 1):
-            source = os.path.basename(doc.metadata.get("source", "unknown"))
-            chunks.append(f"=== Source {i}: {source} ===\n{doc.page_content}\n---")
-        return "\n\n".join(chunks)
+        docs = combined[:TOP_K]
+        for doc in docs:
+            doc.metadata["source_name"] = os.path.basename(doc.metadata.get("source", "unknown"))
+        return docs
 
     llm = ChatOllama(model=LLM_MODEL, temperature=0.1)
-    prompt = PromptTemplate(
-        template=PROMPT_TEMPLATE,
-        input_variables=["context", "chat_history", "question"],
-    )
-    chain = (
-        {
-            "context": lambda d: format_docs(hybrid_retrieve(d["question"])),
-            "chat_history": lambda d: d["chat_history"],
-            "question": lambda d: d["question"],
-        }
-        | prompt
-        | llm
-        | StrOutputParser()
-    )
-    return chain, hybrid_retrieve
 
+    # Step 1: フォローアップ質問を単独の質問に言い換えるリトリーバー
+    history_aware_retriever = create_history_aware_retriever(
+        llm, RunnableLambda(hybrid_retrieve), CONTEXTUALIZE_PROMPT
+    )
 
-def format_chat_history(messages: list[dict]) -> str:
-    """メッセージリストを LLM に渡す会話履歴テキストに整形する。"""
-    if not messages:
-        return "(なし)"
-    lines = []
-    for msg in messages:
-        role = "ユーザー" if msg["role"] == "user" else "アシスタント"
-        lines.append(f"{role}: {msg['content']}")
-    return "\n".join(lines)
+    # Step 2: 取得ドキュメントをソース名付きで整形する QA チェーン
+    doc_prompt = PromptTemplate.from_template(
+        "=== {source_name} ===\n{page_content}\n---"
+    )
+    qa_chain = create_stuff_documents_chain(
+        llm, QA_PROMPT,
+        document_prompt=doc_prompt,
+        document_separator="\n\n",
+    )
+
+    # Step 3: リトリーバー + QA を結合した RAG チェーン
+    rag_chain = create_retrieval_chain(history_aware_retriever, qa_chain)
+
+    # Step 4: 既存 DB をそのまま使う履歴管理でラップ
+    chain_with_history = RunnableWithMessageHistory(
+        rag_chain,
+        lambda session_id: AppChatMessageHistory(session_id),
+        input_messages_key="input",
+        history_messages_key="chat_history",
+        output_messages_key="answer",
+    )
+    return chain_with_history
 
 
 # ── ベクトルストア存在チェック ──────────────────────────────
@@ -136,7 +135,7 @@ if not os.path.exists(VECTORSTORE_PATH):
 if not os.path.exists(DOCS_CACHE_PATH):
     st.warning("BM25用のキャッシュがありません。`python ingest.py` を再実行してください。")
 
-chain, retriever = load_chain()
+chain_with_history = load_chain()
 
 # ── セッション初期化 ────────────────────────────────────────
 # 再起動後は直近セッションを復元し、存在しない場合のみ新規作成
@@ -162,7 +161,7 @@ with st.sidebar:
     st.download_button(
         label="📥 エクスポート",
         data=export_content.encode("utf-8"),
-        file_name=export_filename(),  # レンダリング時に確定、変数切り出し不要
+        file_name=export_filename(),
         mime="text/markdown",
         use_container_width=True,
     )
@@ -196,23 +195,23 @@ for msg in messages:
 
 # 入力欄
 if question := st.chat_input("Obsidian ノートに質問する..."):
-    recent_history = get_recent_messages(st.session_state.session_id, CHAT_HISTORY_TURNS)
-    save_message(st.session_state.session_id, "user", question)
+    is_first_message = len(messages) == 0
+
     with st.chat_message("user"):
         st.markdown(question)
 
     # 最初のメッセージをセッションタイトルに使用
-    if len(messages) == 0:
+    if is_first_message:
         update_session_title(st.session_state.session_id, question[:40])
-
-    source_docs = retriever(question)
 
     with st.chat_message("assistant"):
         with st.spinner("考え中..."):
-            answer = chain.invoke({
-                "question": question,
-                "chat_history": format_chat_history(recent_history),
-            })
+            result = chain_with_history.invoke(
+                {"input": question},
+                config={"configurable": {"session_id": st.session_state.session_id}},
+            )
+        answer = result["answer"]
+        source_docs = result["context"]
         st.markdown(answer)
 
         with st.expander("📎 参照したノート"):
@@ -222,5 +221,3 @@ if question := st.chat_input("Obsidian ノートに質問する..."):
                 st.markdown(f"**{i}. {filename}**")
                 st.text(doc.page_content[:300] + "..." if len(doc.page_content) > 300 else doc.page_content)
                 st.divider()
-
-    save_message(st.session_state.session_id, "assistant", answer)

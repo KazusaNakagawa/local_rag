@@ -22,8 +22,5 @@ MAX_CHUNK_CHARS = 1500  # コンテキスト長超過防止用の安全上限
 TOP_K = 6              # より多くの候補を拾う
 FETCH_K = 20           # MMR の候補プール数（多いほど多様性UP）
 
-# 会話履歴設定
-CHAT_HISTORY_TURNS = 5  # LLM に渡す直近ターン数
-
 # DB設定
 DB_PATH = os.path.join(PROJECT_ROOT, "data", "chat.db")
