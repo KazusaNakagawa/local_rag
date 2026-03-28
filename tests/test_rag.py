@@ -14,7 +14,7 @@ from rag import format_docs, contextualize_query, stream_answer, _merge_results,
 # ── load_resources ────────────────────────────────────────
 
 def test_load_resources_requires_allow_deserialization():
-    """allow_deserialization=False（デフォルト）では ValueError を送出する。"""
+    """allow_deserialization=False (デフォルト) では ValueError を送出する。"""
     with pytest.raises(ValueError, match="allow_deserialization"):
         load_resources("/any/path")
 

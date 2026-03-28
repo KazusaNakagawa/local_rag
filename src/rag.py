@@ -27,9 +27,10 @@ def _merge_results(bm25_docs: list, faiss_docs: list, top_k: int) -> list:
     dedup キーにソースパスと全文を使うことで、同一内容の異なるファイル間の
     誤った重複排除を防ぐ。BM25 の結果を優先して先頭に配置する。
     """
-    seen, combined = set(), []
+    seen: set[tuple[str, str]] = set()
+    combined = []
     for doc in bm25_docs + faiss_docs:
-        key = doc.metadata.get("source", "") + "|" + doc.page_content
+        key = (doc.metadata.get("source", ""), doc.page_content)
         if key not in seen:
             seen.add(key)
             combined.append(doc)

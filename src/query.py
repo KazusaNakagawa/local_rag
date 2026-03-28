@@ -8,7 +8,7 @@ DOCS_CACHE_PATH = os.path.join(PROJECT_ROOT, "data", "docs_cache.pkl")
 
 
 def query(question: str) -> None:
-    """ベクトルストアを使って質問に回答する（CLI 用・履歴なし）。"""
+    """ベクトルストアを使って質問に回答する (CLI 用・履歴なし)。"""
     if not os.path.exists(VECTORSTORE_PATH):
         print("❌ ベクトルストアが見つかりません。先に ingest.py を実行してください。")
         return
